@@ -1,0 +1,186 @@
+// Процедурная модель МБР в пуле: порт buildMissileModel()/spawnMissile() из
+// reference/earth-nuke.html (~672-720). Пул из POOL_SIZE моделей создаётся один раз в
+// конструкторе — после прогрева spawn()/update() не создают геометрию/материалы/векторы,
+// только переиспользуют то, что уже лежит в слотах.
+import type * as THREE from 'three/webgpu';
+import type { ThreeCtx } from './Renderer';
+import type { Vec3 } from '../sim/geo';
+
+const POOL_SIZE = 8;
+const FLIGHT_TIME = 2.6; // должно совпадать с FLIGHT_TIME в src/sim/Simulation.ts
+const START_RADIUS = 2.6;
+const END_RADIUS = 1.0;
+const MODEL_SPIN_SPEED = 1.5; // рад/с вращения корпуса вокруг собственной оси
+const FLAME_BASE_SCALE = 0.8;
+const FLAME_JITTER = 0.45; // амплитуда дрожания факела (Math.random разрешён в рендере)
+
+interface MissileSlot {
+  readonly group: THREE.Group; // добавлен в spinGroup один раз; позиционируется вдоль dir
+  readonly model: THREE.Group; // корпус ракеты (вращается вокруг z во время полёта)
+  readonly flame: THREE.Mesh; // факел двигателя (дрожание масштаба по Y)
+  readonly dir: THREE.Vector3; // переиспользуемый вектор направления — без аллокаций в update
+  readonly center: THREE.Vector3; // переиспользуемый вектор-скрэтч для lookAt
+  active: boolean;
+  id: number;
+  yieldMt: number;
+  t: number;
+}
+
+export class MissileView {
+  private readonly slots: MissileSlot[] = [];
+
+  constructor(
+    private readonly ctx: ThreeCtx,
+    private readonly spinGroup: THREE.Group,
+  ) {
+    for (let i = 0; i < POOL_SIZE; i++) this.slots.push(this.createSlot());
+  }
+
+  private createSlot(): MissileSlot {
+    const { THREE } = this.ctx;
+    const group = new THREE.Group();
+    group.visible = false;
+    const { model, flame } = this.buildMissileModel();
+    group.add(model);
+    this.spinGroup.add(group);
+    return {
+      group,
+      model,
+      flame,
+      dir: new THREE.Vector3(),
+      center: new THREE.Vector3(),
+      active: false,
+      id: -1,
+      yieldMt: 0,
+      t: 0,
+    };
+  }
+
+  // Порт buildMissileModel() эталона (~643-674): боеголовка, вторая ступень, межступенчатое
+  // кольцо, первая ступень, сопло, 4 стабилизатора, факел. Модель собрана вдоль +z (нос к цели).
+  private buildMissileModel(): { model: THREE.Group; flame: THREE.Mesh } {
+    const { THREE } = this.ctx;
+    const model = new THREE.Group();
+    const white = new THREE.MeshPhongNodeMaterial({
+      color: 0xf0f0f0,
+      shininess: 70,
+      specular: 0x666666,
+    });
+    const dark = new THREE.MeshPhongNodeMaterial({
+      color: 0x1c1c1e,
+      shininess: 30,
+      specular: 0x333333,
+    });
+    const grey = new THREE.MeshPhongNodeMaterial({
+      color: 0xb9bec4,
+      shininess: 40,
+      specular: 0x444444,
+    });
+
+    const add = (
+      geometry: THREE.BufferGeometry,
+      material: THREE.Material,
+      z: number,
+    ): THREE.Mesh => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.rotation.x = Math.PI / 2;
+      mesh.position.z = z;
+      model.add(mesh);
+      return mesh;
+    };
+
+    add(new THREE.ConeGeometry(0.0062, 0.02, 24), dark, 0.035); // боеголовка
+    add(new THREE.CylinderGeometry(0.0062, 0.0062, 0.032, 24), white, 0.009); // вторая ступень
+    add(new THREE.CylinderGeometry(0.0064, 0.0064, 0.005, 24), dark, -0.009); // межступенчатое кольцо
+    add(new THREE.CylinderGeometry(0.0068, 0.0068, 0.034, 24), grey, -0.028); // первая ступень
+    add(new THREE.CylinderGeometry(0.003, 0.0058, 0.008, 24), dark, -0.048); // сопло
+
+    for (let i = 0; i < 4; i++) {
+      // стабилизаторы
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.0012, 0.011, 0.016), dark);
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      fin.position.set(Math.cos(a) * 0.009, Math.sin(a) * 0.009, -0.038);
+      fin.rotation.z = a - Math.PI / 2;
+      model.add(fin);
+    }
+
+    const flame = new THREE.Mesh(
+      new THREE.ConeGeometry(0.0052, 0.035, 16),
+      new THREE.MeshBasicNodeMaterial({
+        color: 0xffb050,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    flame.rotation.x = -Math.PI / 2; // остриё факела назад
+    flame.position.z = -0.066;
+    model.add(flame);
+
+    return { model, flame };
+  }
+
+  // Свободный слот пула, либо (если все заняты — не должно случаться при штатной игре
+  // с 8 слотами и flightTime=2.6с) принудительно отбирает первый слот, обрывая его полёт.
+  private acquireSlot(): MissileSlot | undefined {
+    return this.slots.find((s) => !s.active) ?? this.slots[0];
+  }
+
+  // Активирует слот пула для боеголовки id, летящей в направлении dir (единичный вектор,
+  // локальные координаты spinGroup). yieldMt визуал пока не использует (масштаб/цвет факела
+  // по мощности — Task 9-10), но сохраняется на слоте на будущее.
+  spawn(id: number, dir: Vec3, yieldMt: number): void {
+    const slot = this.acquireSlot();
+    if (!slot) return; // POOL_SIZE > 0 гарантирует наличие слота; guard ради строгих типов
+
+    slot.active = true;
+    slot.id = id;
+    slot.yieldMt = yieldMt;
+    slot.t = 0;
+    slot.dir.set(dir.x, dir.y, dir.z);
+    slot.model.rotation.z = 0;
+    slot.flame.scale.y = 1;
+
+    slot.group.position.copy(slot.dir).multiplyScalar(START_RADIUS);
+    slot.center.set(0, 0, 0);
+    slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+    slot.group.visible = true;
+  }
+
+  // Прячет слот боеголовки id обратно в пул немедленно (вызывается на explosionStarted —
+  // авторитетный сигнал симуляции о конце полёта). Не аллоцирует и безопасно вызывается
+  // повторно/для уже неактивного id.
+  despawn(id: number): void {
+    for (const slot of this.slots) {
+      if (slot.active && slot.id === id) {
+        slot.active = false;
+        slot.group.visible = false;
+      }
+    }
+  }
+
+  // Двигает активные снаряды по дуге radius 2.6→1.0 (по k*k — разгон к поверхности),
+  // держит нос по направлению полёта (lookAt центра) и крутит корпус/дрожит факелом.
+  // Локальный таймер — запасной путь скрытия слота на случай, если explosionStarted
+  // не пришёл вовремя (рассинхрон таймингов); при штатной работе despawn() срабатывает раньше.
+  update(dt: number): void {
+    for (const slot of this.slots) {
+      if (!slot.active) continue;
+
+      slot.t += dt;
+      const k = Math.min(1, slot.t / FLIGHT_TIME);
+      const dist = START_RADIUS - (START_RADIUS - END_RADIUS) * k * k;
+      slot.group.position.copy(slot.dir).multiplyScalar(dist);
+      slot.center.set(0, 0, 0);
+      slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+      slot.model.rotation.z += dt * MODEL_SPIN_SPEED;
+      slot.flame.scale.y = FLAME_BASE_SCALE + Math.random() * FLAME_JITTER;
+
+      if (k >= 1) {
+        slot.active = false;
+        slot.group.visible = false;
+      }
+    }
+  }
+}

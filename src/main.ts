@@ -2,10 +2,13 @@ import { createRenderer } from './render/Renderer';
 import { GameLoop } from './core/GameLoop';
 import { GlobeView } from './render/GlobeView';
 import { TileLayers } from './render/TileLayers';
+import { Scene } from './render/Scene';
 import { CameraRig } from './input/CameraRig';
 import { PointerController } from './input/PointerController';
+import { LocalSimHost } from './sim/SimHost';
 
 const TILE_UPDATE_INTERVAL = 0.3; // секунд между реконсиляциями тайлов — дороже кадрового рендера
+const SIM_SEED = 1; // фиксированный seed локального хоста — воспроизводимость между запусками
 
 async function boot() {
   const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -13,7 +16,7 @@ async function boot() {
   await renderer.init();
   console.log('backend:', renderer.backend);
 
-  const { THREE, scene } = renderer.ctx;
+  const { THREE, scene: threeScene } = renderer.ctx;
   // Звёзды — маркер того, что сцена рендерится.
   const positions = new Float32Array(2500 * 3);
   for (let i = 0; i < positions.length; i += 3) {
@@ -24,14 +27,14 @@ async function boot() {
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.55 })));
+  threeScene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.55 })));
 
   // Освещение сцены (reference/earth-nuke.html строки ~76-79).
   // Больше источников света не добавляем — критично для производительности.
   const sun = new THREE.DirectionalLight(0xffffff, 2.8);
   sun.position.set(5, 2, 3);
-  scene.add(sun);
-  scene.add(new THREE.AmbientLight(0x8899aa, 1.5));
+  threeScene.add(sun);
+  threeScene.add(new THREE.AmbientLight(0x8899aa, 1.5));
 
   // Глобус + атмосфера; дожидаемся готовности текстуры (или процедурного фолбэка),
   // прежде чем включать управление камерой и цикл рендера.
@@ -39,9 +42,19 @@ async function boot() {
   await globe.whenReady();
 
   const rig = new CameraRig(renderer.ctx, globe);
+
+  // Симуляция (Task 7) живёт в локальном хосте: команды буферизуются между тиками,
+  // события накапливаются до drainEvents() — сливаем их раз за кадр рендера.
+  const host = new LocalSimHost(SIM_SEED);
+  // Мощность заряда пока фиксирована — кнопки выбора мощности добавит Hud (Task 10),
+  // тогда переменная снова станет let и будет обновляться по клику на кнопку.
+  const currentYield = 10;
   const pointer = new PointerController(canvas, renderer.ctx, globe, rig, (dir) => {
-    console.log('click dir:', dir);
+    host.post({ kind: 'detonate', dir, yield: currentYield });
   });
+
+  // Мост sim↔render: ракета (MissileView) + тряска камеры на взрыв; Explosion/Decal — Task 9-10.
+  const scene = new Scene(renderer.ctx, globe, host, rig);
 
   // Тайлы спутниковых снимков + границ/названий поверх глобуса (Task 6).
   const tiles = new TileLayers(renderer.ctx, globe, rig);
@@ -67,9 +80,24 @@ async function boot() {
     window as unknown as { __setZoom: (v: number) => void; __tileMeshCount: () => number }
   ).__tileMeshCount = () => tiles.meshCount;
 
+  // Временный хук для ручной/headless-проверки полёта ракеты (Task 8, Step 4) — удар
+  // в точку экрана (по умолчанию — центр видимого диска); постоянный UI-триггер даст Hud
+  // (Task 10). Необязательный dir позволяет прицелиться в конкретную точку из скриншот-теста.
+  (
+    window as unknown as { __strike: (dir?: { x: number; y: number; z: number }) => void }
+  ).__strike = (dir) => {
+    host.post({ kind: 'detonate', dir: dir ?? { x: 0, y: 0, z: 1 }, yield: currentYield });
+  };
+
   const loop = new GameLoop(
-    () => {}, // sim — появится позже
+    (dt) => host.step(dt),
     (frame) => {
+      // Сливаем события симуляции раз за кадр и раздаём всем потребителям (Scene, позже Hud) —
+      // drainEvents() необратимо опустошает буфер, поэтому делаем это только здесь.
+      const events = host.drainEvents();
+      scene.handleEvents(events);
+
+      scene.update(frame);
       rig.update(frame, pointer.isDown);
       tileAcc += frame;
       if (tileAcc >= TILE_UPDATE_INTERVAL) {
