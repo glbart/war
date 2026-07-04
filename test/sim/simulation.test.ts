@@ -1,0 +1,35 @@
+import { describe, it, expect } from 'vitest';
+import { Simulation } from '../../src/sim/Simulation';
+import { lonLatToDir } from '../../src/sim/geo';
+import { TICK_DT } from '../../src/core/time';
+
+describe('Simulation', () => {
+  it('detonate рождает missileLaunched, затем explosionStarted после полёта', () => {
+    const sim = new Simulation(123);
+    const dir = lonLatToDir((37.62 * Math.PI) / 180, (55.75 * Math.PI) / 180);
+    let ev = sim.step(TICK_DT, [{ kind: 'detonate', dir, yield: 10 }]);
+    expect(ev.some((e) => e.kind === 'missileLaunched')).toBe(true);
+    // прогоняем ~3 секунды (полёт 2.6с)
+    let exploded = false;
+    for (let i = 0; i < 100; i++) {
+      ev = sim.step(TICK_DT, []);
+      if (ev.some((e) => e.kind === 'explosionStarted')) exploded = true;
+    }
+    expect(exploded).toBe(true);
+  });
+  it('детерминизм: одинаковый seed и команды -> одинаковые события', () => {
+    const run = () => {
+      const sim = new Simulation(7);
+      const dir = lonLatToDir(0.5, 0.5);
+      const out: string[] = [];
+      let cmds = [{ kind: 'detonate', dir, yield: 100 } as const];
+      for (let i = 0; i < 120; i++) {
+        for (const e of sim.step(TICK_DT, cmds))
+          out.push(e.kind + (e.kind === 'cityHit' ? ':' + e.name : ''));
+        cmds = [];
+      }
+      return out.join('|');
+    };
+    expect(run()).toEqual(run());
+  });
+});
