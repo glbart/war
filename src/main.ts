@@ -89,9 +89,42 @@ async function boot() {
     host.post({ kind: 'detonate', dir: dir ?? { x: 0, y: 0, z: 1 }, yield: currentYield });
   };
 
+  // Прямой хук взрыва без ожидания полёта ракеты (Task 9, Step 4): порождает визуал взрыва
+  // сразу в точке dir (по умолчанию центр видимого диска). Нужен, чтобы стресс-тест получил
+  // 12 ОДНОВРЕМЕННЫХ взрывов, а скриншот — без 2.6с полёта. Не трогает симуляцию (чисто визуал).
+  let boomSeed = 1;
+  (
+    window as unknown as {
+      __boom: (yieldMt?: number, dir?: { x: number; y: number; z: number }) => void;
+    }
+  ).__boom = (yieldMt, dir) => {
+    scene.startExplosion(dir ?? { x: 0, y: 0, z: 1 }, yieldMt ?? currentYield, boomSeed++);
+  };
+
+  // Счётчик времени кадра для стресс-теста: копит max/среднее по окну и выводит в консоль.
+  // Включается из headless-проба через window.__perf.start()/stop().
+  let perfOn = false;
+  let perfCount = 0;
+  let perfSum = 0;
+  let perfMax = 0;
+  (window as unknown as { __perf: { start: () => void; stop: () => void } }).__perf = {
+    start: () => {
+      perfOn = true;
+      perfCount = 0;
+      perfSum = 0;
+      perfMax = 0;
+    },
+    stop: () => {
+      perfOn = false;
+      const avg = perfCount > 0 ? perfSum / perfCount : 0;
+      console.log(`PERF frames=${perfCount} avgMs=${avg.toFixed(2)} maxMs=${perfMax.toFixed(2)}`);
+    },
+  };
+
   const loop = new GameLoop(
     (dt) => host.step(dt),
     (frame) => {
+      const t0 = perfOn ? performance.now() : 0;
       // Сливаем события симуляции раз за кадр и раздаём всем потребителям (Scene, позже Hud) —
       // drainEvents() необратимо опустошает буфер, поэтому делаем это только здесь.
       const events = host.drainEvents();
@@ -105,6 +138,12 @@ async function boot() {
         tiles.update();
       }
       renderer.render(frame);
+      if (perfOn) {
+        const ms = performance.now() - t0;
+        perfCount++;
+        perfSum += ms;
+        if (ms > perfMax) perfMax = ms;
+      }
     },
   );
   loop.start();
