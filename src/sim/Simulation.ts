@@ -5,12 +5,31 @@ import { computeCasualties } from '../ecs/systems/CasualtySystem';
 import { createCities, type City } from './cities';
 import type { Command } from './commands';
 import type { SimEvent } from './events';
+import { YIELDS, type Yield } from '../assets/config';
 
 // Время полёта боеголовки до детонации, сек (порт таймингов демо).
 const FLIGHT_TIME = 2.6;
 
 // Мощности заряда, поддерживаемые демо (мегатонны).
-type YieldMt = 1 | 10 | 100;
+type YieldMt = Yield;
+
+// Runtime-проверка мощности заряда на границе применения команд.
+// Command.yield/Warhead.yield типизированы как number (см. бриф), поэтому
+// значение может прийти из будущего UI/сети произвольным — здесь это
+// отсекается до того, как испорченное значение попадёт в ECS-компонент
+// и таблицы ANG_PATCH/YS/TS (иначе они вернут undefined -> NaN -> необратимая
+// порча c.alive, что ломает детерминизм).
+function isValidYield(y: number): y is Yield {
+  return (YIELDS as readonly number[]).includes(y);
+}
+
+function assertValidYield(y: number): asserts y is Yield {
+  if (!isValidYield(y)) {
+    throw new Error(
+      `Недопустимая мощность заряда: ${y}. Разрешены только значения ${YIELDS.join(', ')} Мт.`,
+    );
+  }
+}
 
 // Временной масштаб волны по мощности заряда (порт из демо, ~726): чем мощнее
 // заряд, тем медленнее и тяжелее разворачивается взрыв.
@@ -51,6 +70,7 @@ export class Simulation {
   private applyCommand(cmd: Command, events: SimEvent[]): void {
     switch (cmd.kind) {
       case 'detonate': {
+        assertValidYield(cmd.yield);
         const id = this.nextId++;
         const entity = this.world.add({
           warhead: {
@@ -66,6 +86,7 @@ export class Simulation {
         break;
       }
       case 'setYield':
+        assertValidYield(cmd.yield);
         this.currentYield = cmd.yield;
         break;
       case 'reset':
@@ -100,7 +121,11 @@ export class Simulation {
       this.ids.delete(entity);
       this.world.remove(entity);
 
-      const ts = TS_TABLE[w.yield as YieldMt];
+      // Инвариант: w.yield провалидирован в applyCommand при создании боеголовки
+      // (assertValidYield в кейсе 'detonate'), поэтому здесь каст безопасен.
+      // Повторная проверка — защита от будущих путей создания warhead в обход applyCommand.
+      assertValidYield(w.yield);
+      const ts = TS_TABLE[w.yield];
       const { hits, totalDeaths } = computeCasualties(this.cities, w.dir, w.yield, ts);
 
       events.push({ kind: 'explosionStarted', id, dir: w.dir, yield: w.yield, seed: w.seed });

@@ -1,8 +1,9 @@
 import { angleBetween, type Vec3 } from '../../sim/geo';
 import type { City } from '../../sim/cities';
+import { YIELDS, type Yield } from '../../assets/config';
 
 // Мощности заряда, поддерживаемые демо (мегатонны).
-type YieldMt = 1 | 10 | 100;
+type YieldMt = Yield;
 
 // Таблицы параметров волны по мощности заряда (порт из демо, ~723-730).
 // ts (временной масштаб волны) в эту функцию передаётся вызывающей стороной —
@@ -21,6 +22,16 @@ export function computeCasualties(
   yieldMt: number,
   ts: number,
 ): { hits: CasualtyHit[]; totalDeaths: number } {
+  // Runtime-guard: yieldMt приходит как number (см. Command/Warhead), вызывающая
+  // сторона (Simulation.applyCommand) обязана провалидировать его до вызова.
+  // Проверяем ещё раз здесь — это последняя граница перед ANG_PATCH/YS, где
+  // невалидное значение вернуло бы undefined и увело арифметику в NaN, необратимо
+  // испортив c.alive (мутация на месте) и сломав детерминизм.
+  if (!(YIELDS as readonly number[]).includes(yieldMt)) {
+    throw new Error(
+      `Недопустимая мощность заряда: ${yieldMt}. Разрешены только значения ${YIELDS.join(', ')} Мт.`,
+    );
+  }
   const key = yieldMt as YieldMt;
   const angPatch = ANG_PATCH[key];
   const ys = YS[key];
