@@ -1,7 +1,7 @@
 // Мост между симуляцией (SimHost) и рендер-объектами three.js. Не тянет события из host
 // сам — main.ts сливает их раз за кадр через host.drainEvents() и раздаёт всем потребителям
-// (Scene и позже Hud), поэтому Scene получает уже готовый список через handleEvents().
-// Пока владеет только MissileView; ExplosionView/DecalView добавятся в Task 9-10.
+// (Scene и Hud), поэтому Scene получает уже готовый список через handleEvents().
+// Владеет MissileView/ExplosionView/ParticlePool/DecalView и звуком взрыва.
 import type { ThreeCtx } from './Renderer';
 import type { GlobeView } from './GlobeView';
 import type { SimHost } from '../sim/SimHost';
@@ -11,6 +11,8 @@ import type { CameraRig } from '../input/CameraRig';
 import { MissileView } from './MissileView';
 import { ExplosionView } from './ExplosionView';
 import { ParticlePool } from './effects/particles';
+import { DecalView } from './DecalView';
+import { playBoom } from './effects/sound';
 
 // Порт shake = Math.max(shake, 0.02 * ys), ys = {1:0.6, 10:1.0, 100:1.7}[yieldMt]
 // (reference/earth-nuke.html ~755) — чем мощнее заряд, тем сильнее толчок камеры.
@@ -21,6 +23,7 @@ export class Scene {
   private readonly missileView: MissileView;
   private readonly explosionView: ExplosionView;
   private readonly particlePool: ParticlePool;
+  private readonly decalView: DecalView;
   private clock = 0; // общие часы рендера (секунды); база спавна частиц и uTime шейдера
 
   // ctx/globe/host не сохраняются полями — используются только здесь, при постройке владений
@@ -36,6 +39,7 @@ export class Scene {
     this.missileView = new MissileView(ctx, globe.spinGroup);
     this.explosionView = new ExplosionView(ctx, globe.spinGroup);
     this.particlePool = new ParticlePool(ctx, globe.spinGroup);
+    this.decalView = new DecalView(ctx, globe);
   }
 
   // Разбирает события, уже слитые из host.drainEvents() вызывающим кодом (main.ts) —
@@ -54,18 +58,23 @@ export class Scene {
         this.missileView.despawn(event.id);
         this.startExplosion(event.dir, event.yield, event.seed);
         break;
+      case 'planetReset':
+        this.decalView.clear();
+        break;
       default:
-        break; // остальные события (cityHit/statsChanged/...) — забота Hud, не Scene
+        break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
     }
   }
 
-  // Запускает визуал взрыва (тряска + огненный шар/волна + частицы гриба). Отдельный метод,
-  // чтобы его мог дёрнуть и обработчик события, и headless-хук __boom напрямую (без ожидания
-  // полёта ракеты) для скриншотов/стресс-теста.
+  // Запускает визуал взрыва (тряска + огненный шар/волна + частицы гриба + кратер-декаль +
+  // звук). Отдельный метод, чтобы его мог дёрнуть и обработчик события, и (при ручной/headless-
+  // проверке) прямой вызов без ожидания полёта ракеты.
   startExplosion(dir: Vec3, yieldMt: number, seed: number): void {
     this.triggerShake(yieldMt);
     this.explosionView.spawn(dir, yieldMt, seed);
     this.particlePool.emit(dir, yieldMt, seed, this.clock);
+    this.decalView.spawn(dir, yieldMt, seed);
+    playBoom(yieldMt);
   }
 
   private triggerShake(yieldMt: number): void {
@@ -79,5 +88,6 @@ export class Scene {
     this.missileView.update(dt);
     this.explosionView.update(dt);
     this.particlePool.setTime(this.clock);
+    this.decalView.update(dt);
   }
 }
