@@ -5,8 +5,13 @@
 import type * as THREE from 'three/webgpu';
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
+import { findFreeSlotIndex } from './SlotPool';
 
-const POOL_SIZE = 8;
+// 16, а не 8: при flightTime=2.6с и отсутствии дебаунса ввода/лимита боеголовок в симуляции
+// быстрым кликаньем реально одновременно поднять больше 8 ракет. Запас вместимости —
+// дешёвый способ сделать исчерпание пула практически недостижимым при обычной игре, оставляя
+// graceful no-op (см. spawn()) как страховку на случай экстремального спама.
+const POOL_SIZE = 16;
 const FLIGHT_TIME = 2.6; // должно совпадать с FLIGHT_TIME в src/sim/Simulation.ts
 const START_RADIUS = 2.6;
 const END_RADIUS = 1.0;
@@ -28,6 +33,7 @@ interface MissileSlot {
 
 export class MissileView {
   private readonly slots: MissileSlot[] = [];
+  private poolExhaustedWarned = false; // чтобы не спамить console.warn каждый кадр спама
 
   constructor(
     private readonly ctx: ThreeCtx,
@@ -121,18 +127,33 @@ export class MissileView {
     return { model, flame };
   }
 
-  // Свободный слот пула, либо (если все заняты — не должно случаться при штатной игре
-  // с 8 слотами и flightTime=2.6с) принудительно отбирает первый слот, обрывая его полёт.
+  // Свободный слот пула через чистую findFreeSlotIndex (test/render/SlotPool.test.ts),
+  // либо undefined, если все POOL_SIZE слотов заняты. Никогда не крадёт чужой активный слот.
   private acquireSlot(): MissileSlot | undefined {
-    return this.slots.find((s) => !s.active) ?? this.slots[0];
+    const idx = findFreeSlotIndex(this.slots);
+    return idx === undefined ? undefined : this.slots[idx];
   }
 
   // Активирует слот пула для боеголовки id, летящей в направлении dir (единичный вектор,
   // локальные координаты spinGroup). yieldMt визуал пока не использует (масштаб/цвет факела
   // по мощности — Task 9-10), но сохраняется на слоте на будущее.
+  //
+  // Если пул исчерпан (все POOL_SIZE слотов заняты) — graceful no-op: не активирует ракету,
+  // не трогает чужие слоты. Симуляция авторитетна и всё равно посчитает взрыв/жертв по своему
+  // таймеру (despawn() на explosionStarted просто не найдёт слот с этим id — а он и не найдёт
+  // ни у кого чужого, т.к. слот не был украден); в редком экстремальном спаме одна ракета
+  // визуально не появится, но ничего не ломается и не пропадает "неправильно".
   spawn(id: number, dir: Vec3, yieldMt: number): void {
     const slot = this.acquireSlot();
-    if (!slot) return; // POOL_SIZE > 0 гарантирует наличие слота; guard ради строгих типов
+    if (!slot) {
+      if (!this.poolExhaustedWarned) {
+        this.poolExhaustedWarned = true;
+        console.warn(
+          `MissileView: пул из ${POOL_SIZE} слотов исчерпан, ракета id=${id} не отрисована (sim продолжает считать её штатно)`,
+        );
+      }
+      return;
+    }
 
     slot.active = true;
     slot.id = id;
