@@ -1,8 +1,11 @@
 import { createRenderer } from './render/Renderer';
 import { GameLoop } from './core/GameLoop';
 import { GlobeView } from './render/GlobeView';
+import { TileLayers } from './render/TileLayers';
 import { CameraRig } from './input/CameraRig';
 import { PointerController } from './input/PointerController';
+
+const TILE_UPDATE_INTERVAL = 0.3; // секунд между реконсиляциями тайлов — дороже кадрового рендера
 
 async function boot() {
   const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -40,12 +43,39 @@ async function boot() {
     console.log('click dir:', dir);
   });
 
+  // Тайлы спутниковых снимков + границ/названий поверх глобуса (Task 6).
+  const tiles = new TileLayers(renderer.ctx, globe, rig);
+  let tileAcc = 0;
+
   window.addEventListener('resize', () => renderer.resize(window.innerWidth, window.innerHeight));
+
+  // Временный тумблер слоя названий/границ клавишей L — постоянную кнопку добавит Hud (Task 10).
+  let labelsEnabled = true;
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'l') return;
+    labelsEnabled = !labelsEnabled;
+    tiles.setLabelsEnabled(labelsEnabled);
+  });
+
+  // Хуки для ручной проверки из headless-скриншотов/консоли (зум и число мешей тайлов).
+  (
+    window as unknown as { __setZoom: (v: number) => void; __tileMeshCount: () => number }
+  ).__setZoom = (v: number) => {
+    rig.zoom = v;
+  };
+  (
+    window as unknown as { __setZoom: (v: number) => void; __tileMeshCount: () => number }
+  ).__tileMeshCount = () => tiles.meshCount;
 
   const loop = new GameLoop(
     () => {}, // sim — появится позже
     (frame) => {
       rig.update(frame, pointer.isDown);
+      tileAcc += frame;
+      if (tileAcc >= TILE_UPDATE_INTERVAL) {
+        tileAcc = 0;
+        tiles.update();
+      }
       renderer.render(frame);
     },
   );
