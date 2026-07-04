@@ -1,5 +1,8 @@
 import { createRenderer } from './render/Renderer';
 import { GameLoop } from './core/GameLoop';
+import { GlobeView } from './render/GlobeView';
+import { CameraRig } from './input/CameraRig';
+import { PointerController } from './input/PointerController';
 
 async function boot() {
   const canvas = document.getElementById('scene') as HTMLCanvasElement;
@@ -20,11 +23,31 @@ async function boot() {
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.55 })));
 
+  // Освещение сцены (reference/earth-nuke.html строки ~76-79).
+  // Больше источников света не добавляем — критично для производительности.
+  const sun = new THREE.DirectionalLight(0xffffff, 2.8);
+  sun.position.set(5, 2, 3);
+  scene.add(sun);
+  scene.add(new THREE.AmbientLight(0x8899aa, 1.5));
+
+  // Глобус + атмосфера; дожидаемся готовности текстуры (или процедурного фолбэка),
+  // прежде чем включать управление камерой и цикл рендера.
+  const globe = new GlobeView(renderer.ctx);
+  await globe.whenReady();
+
+  const rig = new CameraRig(renderer.ctx, globe);
+  const pointer = new PointerController(canvas, renderer.ctx, globe, rig, (dir) => {
+    console.log('click dir:', dir);
+  });
+
   window.addEventListener('resize', () => renderer.resize(window.innerWidth, window.innerHeight));
 
   const loop = new GameLoop(
     () => {}, // sim — появится позже
-    () => renderer.render(0),
+    (frame) => {
+      rig.update(frame, pointer.isDown);
+      renderer.render(frame);
+    },
   );
   loop.start();
 }
