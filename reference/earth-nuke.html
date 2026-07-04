@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>☢ Ядерная песочница — Земля</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a2238; }
+  #scene { position: fixed; inset: 0; display: block; cursor: crosshair; }
+  #ui {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    color: #cfe3ff; font: 14px/1.5 "SF Mono", Menlo, Consolas, monospace;
+    background: rgba(8, 14, 26, 0.72); border: 1px solid rgba(120, 170, 255, 0.25);
+    border-radius: 12px; padding: 14px 16px; backdrop-filter: blur(6px);
+    user-select: none; min-width: 230px;
+  }
+  #ui h1 { margin: 0 0 8px; font-size: 15px; letter-spacing: 1px; color: #ffd28a; }
+  #stats { margin: 0 0 10px; }
+  #stats b { color: #ff9b5e; }
+  .row { display: flex; gap: 6px; margin-bottom: 8px; }
+  button {
+    flex: 1; padding: 6px 8px; font: inherit; font-size: 12px;
+    color: #cfe3ff; background: rgba(40, 60, 100, 0.5);
+    border: 1px solid rgba(120, 170, 255, 0.3); border-radius: 8px; cursor: pointer;
+  }
+  button:hover { background: rgba(70, 100, 160, 0.6); }
+  button.active { background: #b8471f; border-color: #ff9b5e; color: #fff; }
+  #reset { width: 100%; background: rgba(30, 90, 50, 0.5); }
+  #reset:hover { background: rgba(40, 130, 70, 0.6); }
+  #hint { margin: 8px 0 0; font-size: 11px; color: #7d93b8; }
+  #feed { margin: 0 0 8px; font-size: 11px; line-height: 1.6; color: #ff8f7a; max-height: 100px; overflow: hidden; }
+  #feed div { animation: feedIn 0.4s ease-out; }
+  @keyframes feedIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+  #credit { margin: 4px 0 0; font-size: 10px; color: #5a6d8c; }
+  #loading {
+    position: fixed; inset: 0; z-index: 20; display: flex; align-items: center;
+    justify-content: center; color: #9db8e0; font: 16px Menlo, monospace;
+    background: #1a2238; transition: opacity 0.6s; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="ui">
+  <h1>☢ ЯДЕРНАЯ ПЕСОЧНИЦА</h1>
+  <div id="stats">Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b></div>
+  <div id="feed"></div>
+  <div class="row">
+    <button data-yield="1">1 Мт</button>
+    <button data-yield="10" class="active">10 Мт</button>
+    <button data-yield="100">100 Мт</button>
+  </div>
+  <button id="reset">Восстановить планету</button>
+  <button id="labels" class="active" style="width: 100%; margin-top: 8px">Границы и названия: вкл</button>
+  <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар<br>Приблизься — подгрузятся спутниковые снимки</p>
+  <p id="credit">Снимки: Esri World Imagery</p>
+</div>
+<div id="loading">Загрузка планеты…</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- Рендерер и сцена ----------
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a2238);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 200);
+camera.position.set(0, 0, 3.2);
+
+const sun = new THREE.DirectionalLight(0xffffff, 2.8);
+sun.position.set(5, 2, 3);
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x8899aa, 1.5));
+
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------- Звёзды ----------
+{
+  const positions = new Float32Array(2500 * 3);
+  for (let i = 0; i < positions.length; i += 3) {
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(60 + Math.random() * 60);
+    positions[i] = v.x; positions[i + 1] = v.y; positions[i + 2] = v.z;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.55, sizeAttenuation: true })));
+}
+
+// ---------- Базовый глобус (виден издалека, под тайлами) ----------
+const TEX_W = 4096, TEX_H = 2048;
+const earthMat = new THREE.MeshPhongMaterial({ shininess: 12, specular: 0x223344 });
+
+const tiltGroup = new THREE.Group();   // наклон (drag по вертикали)
+const spinGroup = new THREE.Group();   // вращение (drag по горизонтали)
+tiltGroup.add(spinGroup);
+scene.add(tiltGroup);
+
+const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), earthMat);
+spinGroup.add(earth);
+
+const tilesGroup = new THREE.Group();   // тайлы снимков поверх глобуса
+spinGroup.add(tilesGroup);
+const overlayGroup = new THREE.Group(); // границы и названия поверх снимков
+spinGroup.add(overlayGroup);
+
+// Атмосферное свечение (fresnel на задней стороне увеличенной сферы)
+const atmo = new THREE.Mesh(
+  new THREE.SphereGeometry(1.06, 64, 48),
+  new THREE.ShaderMaterial({
+    vertexShader: `
+      varying vec3 vNormal;
+      void main() {
+        vNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying vec3 vNormal;
+      void main() {
+        float rim = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 4.5);
+        gl_FragColor = vec4(0.35, 0.55, 1.0, 1.0) * rim * 0.55;
+      }`,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+  })
+);
+spinGroup.add(atmo);
+
+let earthReady = false;
+
+function drawProceduralEarth(ctx) {
+  const g = ctx.createLinearGradient(0, 0, 0, TEX_H);
+  g.addColorStop(0, '#0a2a52'); g.addColorStop(0.5, '#0e3a6e'); g.addColorStop(1, '#0a2a52');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, TEX_W, TEX_H);
+  let seed = 1337;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  ctx.globalAlpha = 0.9;
+  for (let c = 0; c < 14; c++) {
+    const cx = rnd() * TEX_W, cy = TEX_H * (0.18 + rnd() * 0.64);
+    const hue = 80 + rnd() * 40, size = 60 + rnd() * 140;
+    for (let b = 0; b < 40; b++) {
+      const a = rnd() * Math.PI * 2, d = rnd() * size;
+      ctx.fillStyle = `hsl(${hue + rnd() * 20}, ${35 + rnd() * 20}%, ${28 + rnd() * 14}%)`;
+      ctx.beginPath();
+      ctx.ellipse((cx + Math.cos(a) * d * 1.6 + TEX_W) % TEX_W, cy + Math.sin(a) * d,
+        20 + rnd() * 50, 14 + rnd() * 34, rnd() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#e8f0f6';
+  ctx.fillRect(0, 0, TEX_W, TEX_H * 0.05);
+  ctx.fillRect(0, TEX_H * 0.95, TEX_W, TEX_H * 0.05);
+}
+
+function loadEarthTexture() {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const fallback = setTimeout(() => resolve(null), 15000);
+    img.onload = () => { clearTimeout(fallback); resolve(img); };
+    img.onerror = () => { clearTimeout(fallback); resolve(null); };
+    img.src = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg';
+  });
+}
+
+loadEarthTexture().then((img) => {
+  const c = document.createElement('canvas');
+  c.width = TEX_W; c.height = TEX_H;
+  const ctx = c.getContext('2d');
+  if (img) ctx.drawImage(img, 0, 0, TEX_W, TEX_H);
+  else drawProceduralEarth(ctx);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  earthMat.map = tex;
+  earthMat.needsUpdate = true;
+  earthReady = true;
+  const loading = document.getElementById('loading');
+  loading.style.opacity = '0';
+  setTimeout(() => loading.remove(), 700);
+});
+
+new THREE.TextureLoader().load(
+  'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png',
+  (tex) => { earthMat.bumpMap = tex; earthMat.bumpScale = 0.6; earthMat.needsUpdate = true; }
+);
+
+// ---------- Тайлы спутниковых снимков (Web Mercator, как на картах) ----------
+const MAX_MERC_LAT = 85.05112878 * Math.PI / 180;
+const tileLoader = new THREE.TextureLoader();
+tileLoader.setCrossOrigin('anonymous');
+
+// Слои тайлов: спутниковые снимки (только вблизи) и границы/названия (на любом зуме)
+const LAYERS = [
+  {
+    name: 'imagery',
+    url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
+    group: tilesGroup, cache: new Map(), meshes: new Map(), lastDesired: new Set(),
+    unlit: false, rOff: 0, minZ: 3, enabled: true,
+    active: (s) => s <= 1.2,
+  },
+  {
+    name: 'labels',
+    url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`,
+    group: overlayGroup, cache: new Map(), meshes: new Map(), lastDesired: new Set(),
+    unlit: true, rOff: 0.0009, minZ: 2, enabled: true,
+    active: () => true,
+  },
+];
+
+function latToTileYf(lat, n) {
+  lat = THREE.MathUtils.clamp(lat, -MAX_MERC_LAT, MAX_MERC_LAT);
+  return (1 - Math.log(Math.tan(lat / 2 + Math.PI / 4)) / Math.PI) / 2 * n;
+}
+function tileYfToLat(yf, n) {
+  return Math.atan(Math.sinh(Math.PI * (1 - 2 * yf / n)));
+}
+// Соглашение осей совпадает с UV-развёрткой SphereGeometry и равнопромежуточной текстурой
+function lonLatToDir(lon, lat) {
+  return new THREE.Vector3(
+    Math.cos(lat) * Math.cos(lon),
+    Math.sin(lat),
+    -Math.cos(lat) * Math.sin(lon)
+  );
+}
+
+function makeTileGeometry(z, x, y, rOff) {
+  const SEG = 8, n = 1 << z;
+  const R = 1.0003 + z * 0.00015 + rOff; // чем детальнее уровень, тем выше слой
+  const pos = [], uv = [], idx = [];
+  for (let j = 0; j <= SEG; j++) {
+    const lat = tileYfToLat(y + j / SEG, n);
+    for (let i = 0; i <= SEG; i++) {
+      const lon = ((x + i / SEG) / n) * 2 * Math.PI - Math.PI;
+      const p = lonLatToDir(lon, lat).multiplyScalar(R);
+      pos.push(p.x, p.y, p.z);
+      uv.push(i / SEG, 1 - j / SEG);
+    }
+  }
+  const W = SEG + 1;
+  for (let j = 0; j < SEG; j++) {
+    for (let i = 0; i < SEG; i++) {
+      const a = j * W + i, b = a + 1, c = a + W, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+const tileKey = (z, x, y) => z + '/' + x + '/' + y;
+
+function computeDesiredTiles(minZ) {
+  const d = zoom, s = Math.max(0.02, d - 1);
+  if (!earthReady) return [];
+  const zt = THREE.MathUtils.clamp(Math.ceil(Math.log2(0.0296 * window.innerHeight / s)), minZ, 10);
+  const n = 1 << zt;
+  const camLocal = spinGroup.worldToLocal(camera.position.clone()).normalize();
+  const lat = Math.asin(THREE.MathUtils.clamp(camLocal.y, -1, 1));
+  const lon = Math.atan2(-camLocal.z, camLocal.x);
+
+  // Угловой радиус видимой области: лучи через углы экрана
+  let gamma = 0, allHit = true;
+  for (const [cx, cy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    raycaster.setFromCamera(new THREE.Vector2(cx, cy), camera);
+    const hit = raycaster.intersectObject(earth)[0];
+    if (!hit) { allHit = false; break; }
+    const hl = earth.worldToLocal(hit.point.clone()).normalize();
+    gamma = Math.max(gamma, Math.acos(THREE.MathUtils.clamp(hl.dot(camLocal), -1, 1)));
+  }
+  const horizon = Math.acos(1 / d);
+  gamma = allHit ? Math.min(gamma * 1.25 + Math.PI / n, horizon) : horizon + 0.05;
+
+  const y0 = Math.max(0, Math.floor(latToTileYf(lat + gamma, n)));
+  const y1 = Math.min(n - 1, Math.floor(latToTileYf(lat - gamma, n)));
+  const xC = Math.floor(((lon + Math.PI) / (2 * Math.PI)) * n);
+  const halfLon = Math.PI / n;
+  const out = [], seen = new Set();
+  for (let yt = y0; yt <= y1; yt++) {
+    const rowLat = tileYfToLat(yt + 0.5, n);
+    const dx = Math.min(Math.ceil(gamma / (2 * halfLon * Math.max(0.12, Math.cos(rowLat)))) + 1, n >> 1);
+    for (let k = -dx; k <= dx; k++) {
+      const xt = ((xC + k) % n + n) % n;
+      const key = tileKey(zt, xt, yt);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const cLon = ((xt + 0.5) / n) * 2 * Math.PI - Math.PI;
+      const dist = Math.acos(THREE.MathUtils.clamp(lonLatToDir(cLon, rowLat).dot(camLocal), -1, 1));
+      if (dist < gamma + 2.2 * halfLon / Math.max(0.3, Math.cos(rowLat))) out.push({ zt, xt, yt, dist });
+    }
+  }
+  out.sort((a, b) => a.dist - b.dist);
+  return out.slice(0, 160);
+}
+
+function addTileMesh(L, key, t, tex) {
+  const mat = L.unlit
+    ? new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+    : new THREE.MeshPhongMaterial({ map: tex, side: THREE.DoubleSide, shininess: 6, specular: 0x111111 });
+  const mesh = new THREE.Mesh(makeTileGeometry(t.zt, t.xt, t.yt, L.rOff), mat);
+  L.group.add(mesh);
+  L.meshes.set(key, mesh);
+}
+
+function reconcileLayer(L) {
+  const desired = (L.enabled && L.active(zoom - 1)) ? computeDesiredTiles(L.minZ) : [];
+  const curZ = desired.length ? desired[0].zt : 0;
+  const desiredKeys = new Set(desired.map((t) => tileKey(t.zt, t.xt, t.yt)));
+  L.lastDesired = desiredKeys;
+
+  for (const t of desired) {
+    const key = tileKey(t.zt, t.xt, t.yt);
+    if (L.meshes.has(key)) continue;
+    const cached = L.cache.get(key);
+    if (cached === 'loading' || cached === 'error') continue;
+    if (cached) { addTileMesh(L, key, t, cached); continue; }
+    L.cache.set(key, 'loading');
+    tileLoader.load(L.url(t.zt, t.xt, t.yt), (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      L.cache.set(key, tex);
+      if (L.lastDesired.has(key) && !L.meshes.has(key)) addTileMesh(L, key, t, tex);
+    }, undefined, () => L.cache.set(key, 'error'));
+  }
+
+  // Тайлы прежнего уровня остаются подложкой, пока не догрузится текущий
+  const allLoaded = desired.every((t) => L.meshes.has(tileKey(t.zt, t.xt, t.yt)));
+  for (const [key, mesh] of L.meshes) {
+    if (desiredKeys.has(key)) continue;
+    const z = Number(key.split('/')[0]);
+    if (allLoaded || z === curZ || desired.length === 0) {
+      L.group.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+      L.meshes.delete(key);
+    }
+  }
+
+  if (L.cache.size > 400) {
+    for (const [key, tex] of L.cache) {
+      if (L.cache.size <= 300) break;
+      if (L.meshes.has(key) || tex === 'loading') continue;
+      if (tex !== 'error' && tex.dispose) tex.dispose();
+      L.cache.delete(key);
+    }
+  }
+}
+
+function reconcileTiles() {
+  for (const L of LAYERS) reconcileLayer(L);
+}
+
+// ---------- Города и жертвы ----------
+// [название, широта, долгота, население агломерации в млн]
+const CITY_DATA = [
+['Tokyo',35.68,139.76,37.4],['Jakarta',-6.21,106.85,33.4],['Delhi',28.61,77.21,32.0],['Seoul',37.57,126.98,25.5],
+['Shanghai',31.23,121.47,28.0],['Mexico City',19.43,-99.13,21.9],['São Paulo',-23.55,-46.63,22.4],['Cairo',30.04,31.24,21.7],
+['Dhaka',23.81,90.41,22.0],['Beijing',39.90,116.40,21.3],['Mumbai',19.08,72.88,21.0],['New York',40.71,-74.01,19.8],
+['Osaka',34.69,135.50,19.0],['Chongqing',29.56,106.55,17.0],['Karachi',24.86,67.01,16.8],['Chengdu',30.57,104.07,16.3],
+['Istanbul',41.01,28.98,15.8],['Kinshasa',-4.32,15.31,16.0],['Lagos',6.52,3.38,15.9],['Buenos Aires',-34.60,-58.38,15.4],
+['Kolkata',22.57,88.36,15.0],['Manila',14.60,120.98,14.4],['Tianjin',39.13,117.20,14.0],['Guangzhou',23.13,113.26,13.9],
+['Rio de Janeiro',-22.91,-43.17,13.7],['Lahore',31.55,74.34,13.5],['Bangalore',12.97,77.59,13.2],['Shenzhen',22.54,114.06,12.9],
+["Xi'an",34.34,108.94,12.9],['Moscow',55.75,37.62,12.6],['Suzhou',31.30,120.58,12.7],['Zhengzhou',34.75,113.63,12.6],
+['Los Angeles',34.05,-118.24,12.5],['Hangzhou',30.27,120.16,12.2],['Chennai',13.08,80.27,11.7],['Tehran',35.69,51.39,14.0],
+['Bogotá',4.71,-74.07,11.3],['Paris',48.86,2.35,11.2],['Wuhan',30.59,114.31,11.1],['London',51.51,-0.13,14.0],
+['Lima',-12.05,-77.04,11.0],['Bangkok',13.76,100.50,10.7],['Hyderabad',17.38,78.47,10.5],['Johannesburg',-26.20,28.05,10.5],
+['Dongguan',23.02,113.75,10.5],['Surabaya',-7.26,112.75,10.0],['Qingdao',36.07,120.38,10.0],['Nagoya',35.18,136.91,9.5],
+['Chicago',41.88,-87.63,9.5],['Ho Chi Minh City',10.82,106.63,9.3],['Nanjing',32.06,118.80,9.3],['Foshan',23.02,113.12,9.5],
+['Shenyang',41.81,123.43,9.1],['Luanda',-8.84,13.23,8.9],['Hanoi',21.03,105.85,8.4],['Kuala Lumpur',3.14,101.69,8.4],
+['Ahmedabad',23.02,72.57,8.4],['Bandung',-6.92,107.61,8.6],['Riyadh',24.71,46.68,7.7],['Baghdad',33.31,44.36,7.5],
+['Dallas',32.78,-96.80,7.6],['Santiago',-33.45,-70.67,6.9],['Surat',21.17,72.83,7.5],['Madrid',40.42,-3.70,6.7],
+['Pune',18.52,73.86,7.4],['Houston',29.76,-95.37,7.1],['Dar es Salaam',-6.79,39.21,7.4],['Hong Kong',22.32,114.17,7.5],
+['Taipei',25.03,121.57,7.0],['Toronto',43.65,-79.38,6.4],['Washington',38.90,-77.04,6.3],['Miami',25.76,-80.19,6.1],
+['Belo Horizonte',-19.92,-43.94,6.1],['Atlanta',33.75,-84.39,6.1],['Philadelphia',39.95,-75.17,6.2],['Singapore',1.35,103.82,5.9],
+['Ankara',39.93,32.86,5.7],['Abidjan',5.36,-4.01,5.6],['Yangon',16.87,96.20,5.6],['Alexandria',31.20,29.92,5.5],
+['Fukuoka',33.59,130.40,5.5],['Sydney',-33.87,151.21,5.4],['Barcelona',41.39,2.17,5.6],['Chittagong',22.36,91.78,5.4],
+['Melbourne',-37.81,144.96,5.2],['Saint Petersburg',59.94,30.31,5.4],['Nairobi',-1.29,36.82,5.1],['Addis Ababa',9.03,38.74,5.2],
+['Guadalajara',20.67,-103.35,5.3],['Monterrey',25.67,-100.32,5.3],['Jeddah',21.49,39.19,4.9],['Boston',42.36,-71.06,4.9],
+['Phoenix',33.45,-112.07,4.9],['Cape Town',-33.92,18.42,4.8],['Medan',3.59,98.67,4.8],['Brasília',-15.79,-47.88,4.8],
+['San Francisco',37.77,-122.42,4.7],['Berlin',52.52,13.40,4.7],['Kabul',34.56,69.21,4.6],['Tel Aviv',32.08,34.78,4.4],
+['Porto Alegre',-30.03,-51.23,4.4],['Detroit',42.33,-83.05,4.3],['Montreal',45.50,-73.57,4.3],['Rome',41.90,12.50,4.3],
+['Milan',45.46,9.19,4.3],['Recife',-8.05,-34.88,4.2],['Fortaleza',-3.72,-38.54,4.1],['Kano',12.00,8.52,4.1],
+['Medellín',6.24,-75.58,4.1],['Rawalpindi',33.68,73.05,4.1],['Jaipur',26.91,75.79,4.1],['Seattle',47.61,-122.33,4.0],
+['Durban',-29.86,31.03,3.9],['Douala',4.05,9.70,3.9],['Lucknow',26.85,80.95,3.9],['Salvador',-12.97,-38.50,3.9],
+['Casablanca',33.57,-7.59,3.8],['Ibadan',7.38,3.95,3.8],['Abuja',9.06,7.49,3.8],['Faisalabad',31.42,73.08,3.7],
+['Curitiba',-25.43,-49.27,3.7],['Minneapolis',44.98,-93.27,3.7],['Antananarivo',-18.88,47.51,3.7],['Athens',37.98,23.73,3.6],
+['Dubai',25.20,55.27,3.6],['Kampala',0.35,32.58,3.6],['Santo Domingo',18.47,-69.89,3.5],['Busan',35.18,129.08,3.4],
+['Asunción',-25.26,-57.58,3.4],['San Diego',32.72,-117.16,3.3],['Dakar',14.72,-17.47,3.3],['Kuwait City',29.38,47.99,3.2],
+['Tampa',27.95,-82.46,3.2],['Kanpur',26.45,80.33,3.2],['Pyongyang',39.03,125.75,3.2],['Guayaquil',-2.19,-79.89,3.1],
+['Warsaw',52.23,21.01,3.1],['Naples',40.85,14.27,3.1],['Izmir',38.42,27.14,3.0],['Cebu',10.32,123.89,3.0],
+['Guatemala City',14.63,-90.51,3.0],['Kyiv',50.45,30.52,3.0],['Lusaka',-15.39,28.32,3.0],['Ouagadougou',12.37,-1.52,3.0],
+['Caracas',10.48,-66.90,2.9],['Algiers',36.75,3.06,2.9],['Lisbon',38.72,-9.14,2.9],['Tashkent',41.30,69.24,2.9],
+['Munich',48.14,11.58,2.9],['Nagpur',21.15,79.09,2.9],['Bamako',12.64,-8.00,2.9],['Vienna',48.21,16.37,2.9],
+['Birmingham',52.48,-1.90,2.9],['Manchester',53.48,-2.24,2.8],['Port-au-Prince',18.54,-72.34,2.8],['Cali',3.44,-76.52,2.8],
+['St. Louis',38.63,-90.20,2.8],['Baltimore',39.29,-76.61,2.8],['Sapporo',43.06,141.35,2.7],['Hamburg',53.55,9.99,2.7],
+['Frankfurt',50.11,8.68,2.7],['Charlotte',35.23,-80.84,2.7],['Orlando',28.54,-81.38,2.7],['Accra',5.60,-0.19,2.6],
+['Mogadishu',2.05,45.32,2.6],['San Antonio',29.42,-98.49,2.6],['Brisbane',-27.47,153.03,2.6],['Vancouver',49.28,-123.12,2.6],
+['Damascus',33.51,36.29,2.5],['Amsterdam',52.37,4.90,2.5],['Brussels',50.85,4.35,2.5],['Portland',45.51,-122.68,2.5],
+['Budapest',47.50,19.04,2.5],['Doha',25.29,51.53,2.4],['Beirut',33.89,35.50,2.4],['Stockholm',59.33,18.07,2.4],
+['Sacramento',38.58,-121.49,2.4],['Pittsburgh',40.44,-80.00,2.4],['Austin',30.27,-97.74,2.4],['Tunis',36.81,10.18,2.4],
+['San Juan',18.47,-66.11,2.4],['Colombo',6.93,79.85,2.3],['Baku',40.41,49.87,2.3],['Bucharest',44.43,26.10,2.3],
+['Las Vegas',36.17,-115.14,2.3],['Phnom Penh',11.56,104.92,2.3],['Peshawar',34.01,71.58,2.3],['Cincinnati',39.10,-84.51,2.3],
+['Kansas City',39.10,-94.58,2.2],['Prague',50.08,14.44,2.2],['Amman',31.95,35.93,2.2],['Copenhagen',55.68,12.57,2.1],
+['Harare',-17.83,31.05,2.1],['Santa Cruz',-17.78,-63.18,2.1],['Havana',23.11,-82.37,2.1],['Cleveland',41.50,-81.69,2.1],
+['Columbus',39.96,-83.00,2.1],['Indianapolis',39.77,-86.16,2.1],['Perth',-31.95,115.86,2.1],['Almaty',43.24,76.95,2.0],
+['Quito',-0.18,-78.47,2.0],['Minsk',53.90,27.57,2.0],['La Paz',-16.49,-68.15,2.0],['Panama City',8.98,-79.52,2.0],
+['Nashville',36.16,-86.78,2.0],['Dublin',53.35,-6.26,1.9],['Montevideo',-34.90,-56.16,1.8],['Maputo',-25.97,32.57,1.8],
+['Davao',7.19,125.46,1.8],['Auckland',-36.85,174.76,1.7],['Belgrade',44.79,20.45,1.7],['Novosibirsk',55.03,82.92,1.6],
+['Ulaanbaatar',47.89,106.91,1.6],['Calgary',51.05,-114.07,1.6],['San José',9.93,-84.08,1.6],['San Salvador',13.69,-89.19,1.6],
+['Yekaterinburg',56.84,60.65,1.5],['Helsinki',60.17,24.94,1.5],['Oslo',59.91,10.75,1.5],['Kathmandu',27.72,85.32,1.5],
+['Edmonton',53.55,-113.49,1.5],['Ottawa',45.42,-75.70,1.5],['Tegucigalpa',14.07,-87.19,1.4],['Zurich',47.37,8.54,1.4],
+['Oklahoma City',35.47,-97.52,1.4],['Adelaide',-34.93,138.60,1.4],['Kazan',55.79,49.12,1.3],['Astana',51.17,71.43,1.3],
+['Sofia',42.70,23.32,1.3],['Jerusalem',31.77,35.22,1.3],['Salt Lake City',40.76,-111.89,1.3],['New Orleans',29.95,-90.07,1.3],
+['Memphis',35.15,-90.05,1.3],['Nizhny Novgorod',56.30,44.00,1.2],['Tbilisi',41.72,44.79,1.2],['Tripoli',32.89,13.19,1.2],
+['Kingston',18.00,-76.80,1.2],['Chelyabinsk',55.16,61.40,1.2],['Omsk',54.99,73.37,1.2],['Samara',53.20,50.15,1.2],
+['Rostov-on-Don',47.24,39.71,1.1],['Ufa',54.74,55.97,1.1],['Krasnoyarsk',56.01,92.87,1.1],['Yerevan',40.18,44.51,1.1],
+['Voronezh',51.67,39.18,1.1],['Managua',12.11,-86.24,1.1],['Perm',58.01,56.25,1.0],['Volgograd',48.71,44.51,1.0],
+['Vientiane',17.98,102.63,1.0],['Honolulu',21.31,-157.86,1.0],['Winnipeg',49.90,-97.14,0.8],['Quebec City',46.81,-71.21,0.8],
+['Vladivostok',43.12,131.89,0.6],['Sochi',43.60,39.73,0.5],['Kaliningrad',54.71,20.45,0.5],['Anchorage',61.22,-149.90,0.4],
+['Reykjavík',64.15,-21.94,0.2],
+];
+const cities = CITY_DATA.map(([name, lat, lon, pop]) => ({
+  name, pop, alive: pop,
+  dir: lonLatToDir(lon * Math.PI / 180, lat * Math.PI / 180),
+}));
+
+let totalDeaths = 0; // в млн
+function fmtPeople(m) {
+  return m >= 1 ? m.toFixed(1).replace('.', ',') + ' млн' : Math.max(1, Math.round(m * 1000)) + ' тыс.';
+}
+
+// ---------- Кратеры-декали (поверх тайлов, видны на любом зуме) ----------
+function orthoBasis(n) {
+  const t1 = Math.abs(n.y) < 0.99
+    ? new THREE.Vector3().crossVectors(n, new THREE.Vector3(0, 1, 0)).normalize()
+    : new THREE.Vector3(1, 0, 0);
+  const t2 = new THREE.Vector3().crossVectors(n, t1).normalize();
+  return [t1, t2];
+}
+
+// Изогнутая «нашлёпка» на сфере вокруг нормали n, полуугол ang, радиус R
+function makePatchGeometry(n, ang, R, rot) {
+  const SEG = 12;
+  const [t1, t2] = orthoBasis(n);
+  const tanA = Math.tan(ang);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const pos = [], uv = [], idx = [];
+  for (let j = 0; j <= SEG; j++) {
+    for (let i = 0; i <= SEG; i++) {
+      const gx = (i / SEG) * 2 - 1, gy = (j / SEG) * 2 - 1;
+      const rx = gx * cr - gy * sr, ry = gx * sr + gy * cr;
+      const p = n.clone()
+        .addScaledVector(t1, rx * tanA)
+        .addScaledVector(t2, ry * tanA)
+        .normalize().multiplyScalar(R);
+      pos.push(p.x, p.y, p.z);
+      uv.push(i / SEG, 1 - j / SEG);
+    }
+  }
+  const W = SEG + 1;
+  for (let j = 0; j < SEG; j++) {
+    for (let i = 0; i < SEG; i++) {
+      const a = j * W + i, b = a + 1, c = a + W, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Сферический «купол» вокруг эпицентра; атрибут aAng — доля углового расстояния до края
+function makeShockwaveGeometry(n, maxAng, R) {
+  const RS = 40, AS = 96;
+  const [t1, t2] = orthoBasis(n);
+  const pos = [], aAng = [], idx = [];
+  for (let j = 0; j <= RS; j++) {
+    const ang = maxAng * j / RS;
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    for (let i = 0; i <= AS; i++) {
+      const phi = 2 * Math.PI * i / AS;
+      const p = n.clone().multiplyScalar(ca)
+        .addScaledVector(t1, Math.cos(phi) * sa)
+        .addScaledVector(t2, Math.sin(phi) * sa)
+        .multiplyScalar(R);
+      pos.push(p.x, p.y, p.z);
+      aAng.push(j / RS);
+    }
+  }
+  const W = AS + 1;
+  for (let j = 0; j < RS; j++) {
+    for (let i = 0; i < AS; i++) {
+      const a = j * W + i, b = a + 1, c = a + W, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aAng', new THREE.Float32BufferAttribute(aAng, 1));
+  geo.setIndex(idx);
+  return geo;
+}
+
+function makeCraterTexture(seed) {
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  let s = seed;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const cx = S / 2, cy = S / 2, R = S * 0.36;
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+  g.addColorStop(0, 'rgba(14, 10, 8, 0.98)');
+  g.addColorStop(0.5, 'rgba(36, 25, 17, 0.88)');
+  g.addColorStop(0.78, 'rgba(58, 40, 26, 0.5)');
+  g.addColorStop(1, 'rgba(58, 40, 26, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.fill();
+  for (let i = 0; i < 18; i++) {
+    const a = rnd() * Math.PI * 2, d = R * (0.55 + rnd() * 0.6), br = R * (0.1 + rnd() * 0.22);
+    const bx = cx + Math.cos(a) * d, by = cy + Math.sin(a) * d;
+    const gg = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+    const al = 0.25 + rnd() * 0.35;
+    gg.addColorStop(0, `rgba(30, 21, 14, ${al})`);
+    gg.addColorStop(1, 'rgba(30, 21, 14, 0)');
+    ctx.fillStyle = gg;
+    ctx.beginPath();
+    ctx.arc(bx, by, br, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const craterTexes = [makeCraterTexture(11), makeCraterTexture(77), makeCraterTexture(211)];
+
+const craterDecals = [];
+const glowDecals = []; // { mesh, age }
+const glowColorHot = new THREE.Color(0xffbb66);
+const glowColorCold = new THREE.Color(0x661505);
+
+function updateGlows(dt) {
+  for (let i = glowDecals.length - 1; i >= 0; i--) {
+    const g = glowDecals[i];
+    g.age += dt;
+    if (g.age > 50) {
+      spinGroup.remove(g.mesh);
+      g.mesh.geometry.dispose();
+      g.mesh.material.dispose();
+      glowDecals.splice(i, 1);
+      continue;
+    }
+    const heat = Math.pow(1 - g.age / 50, 1.6);
+    g.mesh.material.opacity = heat * 0.95;
+    g.mesh.material.color.lerpColors(glowColorHot, glowColorCold, Math.min(1, g.age / 25));
+  }
+}
+
+// ---------- Спрайт мягкой частицы ----------
+function makeSoftTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const softTex = makeSoftTexture();
+
+// ---------- Звук ----------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function boomSound(intensity) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime, dur = 6;
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2.6);
+  }
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buf;
+  const lp = audioCtx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(700, t0);
+  lp.frequency.exponentialRampToValueAtTime(35, t0 + dur);
+  const ng = audioCtx.createGain();
+  ng.gain.value = 0.45 * intensity;
+  noise.connect(lp).connect(ng).connect(audioCtx.destination);
+  noise.start(t0);
+
+  const osc = audioCtx.createOscillator();
+  osc.frequency.setValueAtTime(60, t0);
+  osc.frequency.exponentialRampToValueAtTime(24, t0 + dur);
+  const og = audioCtx.createGain();
+  og.gain.setValueAtTime(0.35 * intensity, t0);
+  og.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(og).connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur);
+}
+
+// ---------- Взрывы ----------
+const effects = []; // объекты с методом update(dt) → false, когда эффект закончился
+let shake = 0;
+
+// Процедурная модель МБР, собрана вдоль +z (нос к цели)
+function buildMissileModel() {
+  const m = new THREE.Group();
+  const white = new THREE.MeshPhongMaterial({ color: 0xf0f0f0, shininess: 70, specular: 0x666666 });
+  const dark = new THREE.MeshPhongMaterial({ color: 0x1c1c1e, shininess: 30, specular: 0x333333 });
+  const grey = new THREE.MeshPhongMaterial({ color: 0xb9bec4, shininess: 40, specular: 0x444444 });
+  const add = (geo, mat, z) => {
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = Math.PI / 2;
+    mesh.position.z = z;
+    m.add(mesh);
+    return mesh;
+  };
+  add(new THREE.ConeGeometry(0.0062, 0.02, 24), dark, 0.035);               // боеголовка
+  add(new THREE.CylinderGeometry(0.0062, 0.0062, 0.032, 24), white, 0.009); // вторая ступень
+  add(new THREE.CylinderGeometry(0.0064, 0.0064, 0.005, 24), dark, -0.009); // межступенчатое кольцо
+  add(new THREE.CylinderGeometry(0.0068, 0.0068, 0.034, 24), grey, -0.028); // первая ступень
+  add(new THREE.CylinderGeometry(0.003, 0.0058, 0.008, 24), dark, -0.048);  // сопло
+  for (let i = 0; i < 4; i++) { // стабилизаторы
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.0012, 0.011, 0.016), dark);
+    const a = i * Math.PI / 2 + Math.PI / 4;
+    fin.position.set(Math.cos(a) * 0.009, Math.sin(a) * 0.009, -0.038);
+    fin.rotation.z = a - Math.PI / 2;
+    m.add(fin);
+  }
+  const flame = new THREE.Mesh( // факел двигателя
+    new THREE.ConeGeometry(0.0052, 0.035, 16),
+    new THREE.MeshBasicMaterial({
+      color: 0xffb050, transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
+  flame.rotation.x = -Math.PI / 2; // остриё факела назад
+  flame.position.z = -0.066;
+  m.add(flame);
+  return { model: m, flame };
+}
+
+function spawnMissile(localPoint, yieldMt) {
+  const n = localPoint.clone().normalize();
+  const group = new THREE.Group();
+  const { model, flame } = buildMissileModel();
+  group.add(model);
+  const trail = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.003, 0.011, 0.35, 8),
+    new THREE.MeshBasicMaterial({
+      color: 0xff9944, transparent: true, opacity: 0.55,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
+  trail.rotation.x = Math.PI / 2;
+  trail.position.z = -0.26; // позади ракеты
+  group.add(trail);
+  group.position.copy(n.clone().multiplyScalar(2.6));
+  group.lookAt(spinGroup.localToWorld(new THREE.Vector3(0, 0, 0)));
+  spinGroup.add(group);
+
+  let t = 0;
+  const flightTime = 2.6;
+  effects.push({
+    update(dt) {
+      t += dt;
+      const k = Math.min(1, t / flightTime);
+      const dist = 2.6 - (2.6 - 1.0) * k * k; // разгон к поверхности
+      group.position.copy(n.clone().multiplyScalar(dist));
+      group.lookAt(spinGroup.localToWorld(new THREE.Vector3(0, 0, 0)));
+      model.rotation.z += dt * 1.5;                    // медленное вращение вокруг оси
+      flame.scale.y = 0.8 + Math.random() * 0.45;      // дрожание факела
+      if (k >= 1) {
+        spinGroup.remove(group);
+        group.traverse((c) => {
+          if (c.isMesh) { c.geometry.dispose(); c.material.dispose(); }
+        });
+        detonate(n, yieldMt);
+        return false;
+      }
+      return true;
+    },
+  });
+}
+
+function detonate(n, yieldMt) {
+  const ys = { 1: 0.6, 10: 1.0, 100: 1.7 }[yieldMt];
+  // чем мощнее заряд, тем медленнее и тяжелее разворачивается взрыв
+  const ts = { 1: 0.8, 10: 1.0, 100: 1.4 }[yieldMt];
+  const surface = n.clone();
+
+  // Постоянный кратер + остывающая раскалённая кайма (декали над тайлами)
+  const angPatch = { 1: 0.05, 10: 0.082, 100: 0.14 }[yieldMt];
+  const rot = Math.random() * Math.PI * 2;
+  const crater = new THREE.Mesh(
+    makePatchGeometry(surface, angPatch, 1.0032, rot),
+    new THREE.MeshLambertMaterial({
+      map: craterTexes[(Math.random() * craterTexes.length) | 0],
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    })
+  );
+  crater.renderOrder = 1;
+  spinGroup.add(crater);
+  craterDecals.push(crater);
+
+  const glowMesh = new THREE.Mesh(
+    makePatchGeometry(surface, angPatch * 1.15, 1.0036, rot),
+    new THREE.MeshBasicMaterial({
+      map: softTex, color: glowColorHot.clone(), transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    })
+  );
+  glowMesh.renderOrder = 2;
+  spinGroup.add(glowMesh);
+  glowDecals.push({ mesh: glowMesh, age: 0 });
+
+  boomSound(ys);
+  shake = Math.max(shake, 0.02 * ys);
+
+  // Свет вспышки
+  const light = new THREE.PointLight(0xffcc77, 0, 3);
+  light.position.copy(surface.clone().multiplyScalar(1.1));
+  spinGroup.add(light);
+
+  // Огненный шар: ярое ядро, мягко тающая кромка
+  const fireball = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 48, 32),
+    new THREE.ShaderMaterial({
+      uniforms: {
+        uColor: { value: new THREE.Color(0xffee99) },
+        uOp: { value: 1 },
+      },
+      vertexShader: `
+        varying vec3 vN, vV;
+        void main() {
+          vN = normalize(normalMatrix * normal);
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vV = -normalize(mv.xyz);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        varying vec3 vN, vV;
+        uniform vec3 uColor;
+        uniform float uOp;
+        void main() {
+          float k = clamp(dot(normalize(vN), normalize(vV)), 0.0, 1.0);
+          float a = pow(k, 1.6); // яркое ядро, прозрачный край
+          gl_FragColor = vec4(uColor * (0.7 + 0.5 * a), a * uOp);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    })
+  );
+  fireball.position.copy(surface.clone().multiplyScalar(1.01));
+  fireball.scale.setScalar(0.01);
+  spinGroup.add(fireball);
+
+  // Ударная волна: фронт, ползущий по поверхности сферы
+  const waveMaxAng = 0.45 * ys;
+
+  // Города в зоне поражения; жертвы засчитаются, когда волна дойдёт до города
+  const hits = [];
+  for (const c of cities) {
+    if (c.alive <= 0.001) continue;
+    const d = Math.acos(THREE.MathUtils.clamp(c.dir.dot(surface), -1, 1));
+    if (d > angPatch) continue;
+    // в эпицентре гибнут все, к краю зоны — ~5%
+    const frac = d <= angPatch * 0.4 ? 1 : 1 - ((d - angPatch * 0.4) / (angPatch * 0.6)) * 0.95;
+    const deaths = c.alive * frac;
+    c.alive -= deaths;
+    const q = Math.min(1, d / waveMaxAng);
+    const at = 12 * (1 - Math.pow(1 - q, 1 / 1.8)) * ts; // момент прихода фронта
+    hits.push({ at, deaths, name: c.name, done: false });
+  }
+  const wave = new THREE.Mesh(
+    makeShockwaveGeometry(surface, waveMaxAng, 1.008),
+    new THREE.ShaderMaterial({
+      uniforms: { uR: { value: 0 }, uOp: { value: 0.9 } },
+      vertexShader: `
+        attribute float aAng;
+        varying float vAng;
+        void main() {
+          vAng = aAng;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        varying float vAng;
+        uniform float uR;
+        uniform float uOp;
+        void main() {
+          float d = vAng - uR;
+          float w = 0.015 + uR * 0.06;              // фронт размывается с расстоянием
+          float x = d / w;
+          float front = exp(-x * x);                // узкая яркая кромка
+          float trail = d < 0.0 ? exp(d * 9.0) * 0.3 : 0.0; // пыльный шлейф позади
+          float a = (front + trail) * uOp;
+          vec3 col = mix(vec3(0.75, 0.6, 0.45), vec3(1.0, 0.93, 0.8), front);
+          gl_FragColor = vec4(col, a);
+        }`,
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    })
+  );
+  wave.renderOrder = 3;
+  spinGroup.add(wave);
+
+  // Гриб: огонь (additive) + дым (normal)
+  const [t1, t2] = orthoBasis(surface);
+  const particles = [];
+  const stemH = 0.28 * ys, capR = 0.11 * ys;
+  for (let i = 0; i < 46; i++) { // ножка
+    particles.push({
+      kind: 'fire', delay: (Math.random() * 1.2) * ts,
+      h0: 0.01, h1: stemH * (0.25 + Math.random() * 0.75),
+      r: 0.01 + Math.random() * 0.028 * ys,
+      angle: Math.random() * Math.PI * 2, spread: 0.008 + Math.random() * 0.02,
+      size: (0.03 + Math.random() * 0.045) * ys, life: (7 + Math.random() * 4) * ts,
+    });
+  }
+  for (let i = 0; i < 70; i++) { // шляпка
+    particles.push({
+      kind: i < 24 ? 'fire' : 'smoke', delay: (2.0 + Math.random() * 2.5) * ts,
+      h0: stemH * 0.85, h1: stemH * (0.95 + Math.random() * 0.3),
+      r: 0.01, spreadTo: capR * (0.4 + Math.random() * 0.9),
+      angle: Math.random() * Math.PI * 2, spread: 0,
+      size: (0.05 + Math.random() * 0.07) * ys, life: (14 + Math.random() * 8) * ts,
+    });
+  }
+  for (let i = 0; i < 30; i++) { // дым по ножке
+    particles.push({
+      kind: 'smoke', delay: (2.5 + Math.random() * 4) * ts,
+      h0: 0.02, h1: stemH * (0.3 + Math.random() * 0.7),
+      r: 0.015 + Math.random() * 0.03 * ys,
+      angle: Math.random() * Math.PI * 2, spread: 0.01 + Math.random() * 0.02,
+      size: (0.04 + Math.random() * 0.06) * ys, life: (16 + Math.random() * 7) * ts,
+    });
+  }
+  const sprites = particles.map((p) => {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: softTex,
+      color: p.kind === 'fire' ? 0xffcc66 : 0x555555,
+      transparent: true, opacity: 0,
+      blending: p.kind === 'fire' ? THREE.AdditiveBlending : THREE.NormalBlending,
+      depthWrite: false,
+    }));
+    s.scale.setScalar(0.001);
+    spinGroup.add(s);
+    return s;
+  });
+
+  let t = 0;
+  const fireColorA = new THREE.Color(0xffee99), fireColorB = new THREE.Color(0xcc3300);
+  const smokeColorA = new THREE.Color(0x776655), smokeColorB = new THREE.Color(0x2a2a2e);
+  const totalLife = 28 * ts;
+
+  effects.push({
+    update(dt) {
+      t += dt;
+      const tt = t / ts; // нормированное время взрыва
+      // Волна дошла до города
+      for (const h of hits) {
+        if (!h.done && t >= h.at) {
+          h.done = true;
+          totalDeaths += h.deaths;
+          addFeedEntry(h.name, h.deaths);
+          updateStats();
+        }
+      }
+      // Свет вспышки: мгновенный пик, долгое затухание
+      light.intensity = Math.max(0, 9 * ys * (1 - tt / 3.5));
+      // Огненный шар: медленно вспухает секунды, гаснет ещё дольше
+      const bk = Math.min(1, tt / 4.5);
+      fireball.scale.setScalar(0.01 + 0.11 * ys * Math.sqrt(bk));
+      fireball.material.uniforms.uOp.value = Math.max(0, Math.min(1, 1.2 - tt / 7));
+      fireball.material.uniforms.uColor.value.lerpColors(fireColorA, fireColorB, Math.min(1, tt / 5));
+      // Ударная волна: быстрый старт, затухающее замедление у края
+      const rk = Math.min(1, tt / 12);
+      wave.material.uniforms.uR.value = 1 - Math.pow(1 - rk, 1.8);
+      wave.material.uniforms.uOp.value = 0.9 * (1 - rk);
+      // Частицы гриба
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i], s = sprites[i];
+        const pt = t - p.delay;
+        if (pt < 0) continue;
+        const lk = Math.min(1, pt / p.life);
+        const rise = 1 - Math.pow(1 - lk, 2);
+        const h = p.h0 + (p.h1 - p.h0) * rise;
+        const spread = p.spreadTo !== undefined ? p.r + p.spreadTo * rise : p.r + p.spread * rise;
+        const wobble = Math.sin(pt * 0.7 + i) * 0.004;
+        const pos = surface.clone().multiplyScalar(1 + h)
+          .addScaledVector(t1, Math.cos(p.angle) * spread + wobble)
+          .addScaledVector(t2, Math.sin(p.angle) * spread);
+        s.position.copy(pos);
+        s.scale.setScalar(p.size * (0.4 + 1.1 * rise));
+        const fadeIn = Math.min(1, pt / (0.8 * ts));
+        s.material.opacity = fadeIn * (p.kind === 'fire' ? 0.85 : 0.65) * (1 - lk);
+        if (p.kind === 'fire') s.material.color.lerpColors(fireColorA, fireColorB, lk);
+        else s.material.color.lerpColors(smokeColorA, smokeColorB, lk * 0.8);
+      }
+      if (t > totalLife) {
+        spinGroup.remove(light, fireball, wave, ...sprites);
+        fireball.material.dispose(); fireball.geometry.dispose();
+        wave.material.dispose(); wave.geometry.dispose();
+        sprites.forEach((s) => s.material.dispose());
+        return false;
+      }
+      return true;
+    },
+  });
+}
+
+// ---------- Управление: вращение, зум, клик ----------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let dragging = false, pointerDown = false;
+let lastX = 0, lastY = 0, downX = 0, downY = 0;
+let velX = 0, velY = 0, idleTime = 0;
+let zoom = 3.2;
+
+canvas.addEventListener('pointerdown', (e) => {
+  ensureAudio();
+  pointerDown = true; dragging = false;
+  lastX = downX = e.clientX; lastY = downY = e.clientY;
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* синтетические события */ }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!pointerDown) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > 5) dragging = true;
+  if (dragging) {
+    // скорость вращения падает с приближением — как на картах
+    const speed = 0.0045 * THREE.MathUtils.clamp((zoom - 1) / 2.2, 0.02, 1);
+    spinGroup.rotation.y += dx * speed;
+    tiltGroup.rotation.x = THREE.MathUtils.clamp(tiltGroup.rotation.x + dy * speed, -1.45, 1.45);
+    velX = dx * speed; velY = dy * speed;
+    idleTime = 0;
+  }
+});
+
+canvas.addEventListener('pointerup', (e) => {
+  pointerDown = false;
+  if (dragging) return;
+  // Клик — удар
+  pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(earth)[0];
+  if (!hit || !earthReady) return;
+  const local = earth.worldToLocal(hit.point.clone()).normalize();
+  spawnMissile(local, currentYield);
+  bombCount += 1;
+  totalMt += currentYield;
+  updateStats();
+  idleTime = 0;
+});
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoom = THREE.MathUtils.clamp(zoom * (1 + e.deltaY * 0.0011), 1.05, 7);
+}, { passive: false });
+
+// ---------- UI ----------
+let currentYield = 10, bombCount = 0, totalMt = 0;
+const bombsEl = document.getElementById('bombs');
+const megatonsEl = document.getElementById('megatons');
+const deathsEl = document.getElementById('deaths');
+const feedEl = document.getElementById('feed');
+
+function updateStats() {
+  bombsEl.textContent = bombCount;
+  megatonsEl.textContent = totalMt;
+  deathsEl.textContent = totalDeaths > 0 ? fmtPeople(totalDeaths) : '0';
+}
+
+function addFeedEntry(name, deaths) {
+  const div = document.createElement('div');
+  div.textContent = `☠ ${name} — ${fmtPeople(deaths)}`;
+  feedEl.prepend(div);
+  while (feedEl.children.length > 5) feedEl.lastChild.remove();
+}
+
+document.querySelectorAll('button[data-yield]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    currentYield = Number(btn.dataset.yield);
+    document.querySelectorAll('button[data-yield]').forEach((b) => b.classList.toggle('active', b === btn));
+  });
+});
+
+const labelsBtn = document.getElementById('labels');
+labelsBtn.addEventListener('click', () => {
+  const L = LAYERS.find((l) => l.name === 'labels');
+  L.enabled = !L.enabled;
+  overlayGroup.visible = L.enabled;
+  labelsBtn.classList.toggle('active', L.enabled);
+  labelsBtn.textContent = L.enabled ? 'Границы и названия: вкл' : 'Границы и названия: выкл';
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  for (const c of craterDecals) {
+    spinGroup.remove(c);
+    c.geometry.dispose();
+    c.material.dispose();
+  }
+  craterDecals.length = 0;
+  for (const g of glowDecals) {
+    spinGroup.remove(g.mesh);
+    g.mesh.geometry.dispose();
+    g.mesh.material.dispose();
+  }
+  glowDecals.length = 0;
+  bombCount = 0; totalMt = 0; totalDeaths = 0;
+  for (const c of cities) c.alive = c.pop;
+  feedEl.innerHTML = '';
+  updateStats();
+});
+
+// ---------- Главный цикл ----------
+const clock = new THREE.Clock();
+let tileTimer = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // Инерция и автовращение (автовращение — только на дальнем зуме)
+  if (!pointerDown) {
+    spinGroup.rotation.y += velX;
+    tiltGroup.rotation.x = THREE.MathUtils.clamp(tiltGroup.rotation.x + velY, -1.45, 1.45);
+    velX *= 0.93; velY *= 0.93;
+    idleTime += dt;
+    if (idleTime > 3 && zoom > 2) spinGroup.rotation.y += dt * 0.04;
+  }
+
+  // Эффекты
+  for (let i = effects.length - 1; i >= 0; i--) {
+    if (!effects[i].update(dt)) effects.splice(i, 1);
+  }
+  updateGlows(dt);
+
+  // Камера: зум + тряска
+  shake = Math.max(0, shake - dt * 0.012);
+  camera.position.set(
+    (Math.random() - 0.5) * shake,
+    (Math.random() - 0.5) * shake,
+    zoom + (Math.random() - 0.5) * shake
+  );
+  camera.lookAt(0, 0, 0);
+
+  // Подгрузка тайлов (после установки камеры)
+  tileTimer += dt;
+  if (tileTimer > 0.3) {
+    tileTimer = 0;
+    reconcileTiles();
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// отладочный хук для автотестов
+window.__dbg = {
+  tileCount: () => LAYERS.reduce((sum, l) => sum + l.meshes.size, 0),
+  setZoom: (v) => { zoom = v; },
+  reconcile: () => reconcileTiles(),
+  boomAt: (mt, lat, lon) => detonate(
+    lat === undefined
+      ? new THREE.Vector3(0, 0, 1)
+      : lonLatToDir(lon * Math.PI / 180, lat * Math.PI / 180),
+    mt || 10
+  ),
+  missile: (mt) => spawnMissile(new THREE.Vector3(0.25, 0.3, 1).normalize(), mt || 10),
+  step: (sec) => {
+    const dt = 1 / 30;
+    for (let f = 0; f < sec * 30; f++) {
+      for (let i = effects.length - 1; i >= 0; i--) {
+        if (!effects[i].update(dt)) effects.splice(i, 1);
+      }
+      updateGlows(dt);
+    }
+  },
+  state: () => JSON.stringify({
+    ready: earthReady, zoom,
+    layers: LAYERS.map((l) => ({ name: l.name, meshes: l.meshes.size, cache: l.cache.size })),
+  }),
+};
+</script>
+</body>
+</html>
