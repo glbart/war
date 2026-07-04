@@ -3,7 +3,8 @@ import { Rng, TICK_DT } from '../../src/core/time';
 
 describe('Rng', () => {
   it('детерминирован при одинаковом seed', () => {
-    const a = new Rng(42), b = new Rng(42);
+    const a = new Rng(42),
+      b = new Rng(42);
     const seqA = [a.next(), a.next(), a.next()];
     const seqB = [b.next(), b.next(), b.next()];
     expect(seqA).toEqual(seqB);

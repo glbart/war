@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { lonLatToDir, dot, angleBetween, latToTileYf, tileYfToLat, MAX_MERC_LAT } from '../../src/sim/geo';
+import {
+  lonLatToDir,
+  dot,
+  angleBetween,
+  latToTileYf,
+  tileYfToLat,
+  MAX_MERC_LAT,
+} from '../../src/sim/geo';
 
 describe('geo', () => {
   it('lonLatToDir даёт единичный вектор', () => {
