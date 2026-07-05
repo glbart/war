@@ -1,10 +1,6 @@
 // Константы ассетов и геймплейных значений, общие для render/input/sim.
-// Порт констант из reference/earth-nuke.html (TEX_W/TEX_H, YIELDS, URL текстур и тайлов).
 
 import type { Biome } from '../sim/material';
-
-export const TEX_W = 4096;
-export const TEX_H = 2048;
 
 // Стилизованная палитра биомов (r,g,b в 0..1).
 export const BIOME_COLORS: Record<Biome, [number, number, number]> = {
@@ -33,11 +29,10 @@ export type Yield = (typeof YIELDS)[number];
 export const YIELD_SIZE_SCALE: Record<number, number> = { 1: 0.6, 10: 1.0, 100: 1.7 };
 export const YIELD_TIME_SCALE: Record<number, number> = { 1: 0.8, 10: 1.0, 100: 1.4 };
 
-export const EARTH_TEXTURE_URL =
-  'https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg';
+// Карта рельефа (bump) глобуса — единственная оставшаяся сетевая текстура (best-effort).
 export const EARTH_TOPO_URL = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png';
 
-export const TILE_IMAGERY_URL = (z: number, x: number, y: number): string =>
-  `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+// Слой границ/подписей Esri поверх стилизованного глобуса (спутниковый слой снимков убран
+// вместе с фичей материала — планета рисуется биом-картой, а не фото).
 export const TILE_LABELS_URL = (z: number, x: number, y: number): string =>
   `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`;
