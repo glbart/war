@@ -1,6 +1,7 @@
 import { createRenderer } from './render/Renderer';
 import { GameLoop } from './core/GameLoop';
 import { GlobeView } from './render/GlobeView';
+import { DamageField } from './render/DamageField';
 import { TileLayers } from './render/TileLayers';
 import { Scene } from './render/Scene';
 import { CameraRig } from './input/CameraRig';
@@ -38,9 +39,13 @@ async function boot() {
   threeScene.add(sun);
   threeScene.add(new THREE.AmbientLight(0x8899aa, 1.5));
 
+  // Поле урона планеты (Task 7): equirect RGBA8 — заполняется splat() в Scene (Task 9),
+  // здесь только создаём и прокидываем текстуру в материал глобуса.
+  const damageField = new DamageField(renderer.ctx);
+
   // Глобус + атмосфера; дожидаемся готовности текстуры (или процедурного фолбэка),
   // прежде чем включать управление камерой и цикл рендера.
-  const globe = new GlobeView(renderer.ctx);
+  const globe = new GlobeView(renderer.ctx, damageField.texture);
   await globe.whenReady();
 
   const rig = new CameraRig(renderer.ctx, globe);

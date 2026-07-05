@@ -13,10 +13,17 @@ import {
   oneMinus,
   abs,
   vec4,
+  vec3,
   float,
+  clamp,
+  mix,
+  texture,
+  uv,
+  positionLocal,
+  normalLocal,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
-import { EARTH_TOPO_URL } from '../assets/config';
+import { EARTH_TOPO_URL, GLOBE_LON_SEG, GLOBE_LAT_SEG, MAX_CRATER_DEPTH } from '../assets/config';
 import { buildBiomeCanvas } from './MaterialGlobe';
 
 const ATMOSPHERE_RADIUS = 1.06;
@@ -30,17 +37,41 @@ export class GlobeView {
 
   private readonly readyPromise: Promise<void>;
 
-  constructor(ctx: ThreeCtx) {
+  constructor(ctx: ThreeCtx, damageTex: THREE.Texture) {
     const { THREE } = ctx;
 
     const earthMaterial = new THREE.MeshPhongNodeMaterial({ shininess: 12, specular: 0x223344 });
+
+    // Биом-текстура строится синхронно (нужна сразу для colorNode материала); карта рельефа
+    // (bump) грузится отдельно и асинхронно в loadTexture() и на геометрию/цвет не влияет.
+    const biomeTex = new THREE.CanvasTexture(buildBiomeCanvas());
+    biomeTex.colorSpace = THREE.SRGBColorSpace;
+    biomeTex.anisotropy = ctx.renderer.getMaxAnisotropy();
+
+    // Поле урона (Task 7): R=глубина воронки, G=гарь, B=оплавление/полынья.
+    const dmg = texture(damageTex, uv());
+    const depth = dmg.r;
+    // Вдавливание воронки: сдвиг вершины внутрь вдоль нормали. Обязательно локальные
+    // position/normal (не world) — сфера описана в объектных координатах.
+    earthMaterial.positionNode = positionLocal.sub(
+      normalLocal.mul(depth.mul(float(MAX_CRATER_DEPTH))),
+    );
+
+    // Перекраска: биом-цвет → копоть по каналу G → тёмная вода/полынья по каналу B.
+    const base = texture(biomeTex, uv()).rgb;
+    const charred = mix(base, vec3(0.06, 0.05, 0.05), clamp(dmg.g, 0, 1));
+    const molten = mix(charred, vec3(0.05, 0.12, 0.2), clamp(dmg.b, 0, 1));
+    earthMaterial.colorNode = molten;
 
     this.tiltGroup = new THREE.Group();
     this.spinGroup = new THREE.Group();
     this.tiltGroup.add(this.spinGroup);
     ctx.scene.add(this.tiltGroup);
 
-    this.earthMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), earthMaterial);
+    this.earthMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1, GLOBE_LON_SEG, GLOBE_LAT_SEG),
+      earthMaterial,
+    );
     this.spinGroup.add(this.earthMesh);
 
     this.spinGroup.add(this.buildAtmosphere(ctx));
@@ -67,20 +98,13 @@ export class GlobeView {
     return new THREE.Mesh(new THREE.SphereGeometry(ATMOSPHERE_RADIUS, 64, 48), atmoMaterial);
   }
 
-  // Строит стилизованную биом-текстуру (вместо фотоснимка), заворачивает в CanvasTexture
-  // и подставляет в материал; отдельно (не блокируя готовность) грузит карту рельефа (bump).
+  // Биом-текстура уже подставлена в colorNode материала синхронно в конструкторе; здесь только
+  // догружаем карту рельефа (bump) — не блокирует готовность колора/деформации.
   private async loadTexture(
     ctx: ThreeCtx,
     earthMaterial: THREE.MeshPhongNodeMaterial,
   ): Promise<void> {
     const { THREE } = ctx;
-    const canvas = buildBiomeCanvas();
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = ctx.renderer.getMaxAnisotropy();
-    earthMaterial.map = tex;
-    earthMaterial.needsUpdate = true;
-
     new THREE.TextureLoader().load(EARTH_TOPO_URL, (topo) => {
       earthMaterial.bumpMap = topo;
       earthMaterial.bumpScale = 0.6;
@@ -88,7 +112,8 @@ export class GlobeView {
     });
   }
 
-  // Резолвится, когда биом-текстура готова и подставлена в материал.
+  // Резолвится сразу же (биом-текстура и узлы материала готовы синхронно в конструкторе);
+  // оставлено для совместимости вызова в main.ts (await до включения управления камерой).
   whenReady(): Promise<void> {
     return this.readyPromise;
   }
