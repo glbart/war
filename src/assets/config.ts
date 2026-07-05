@@ -72,6 +72,12 @@ export type Yield = (typeof YIELDS)[number];
 export const YIELD_SIZE_SCALE: Record<number, number> = { 1: 0.6, 10: 1.0, 100: 1.7 };
 export const YIELD_TIME_SCALE: Record<number, number> = { 1: 0.8, 10: 1.0, 100: 1.4 };
 
+// Баллистический выброс грунта при ударе по суше (EjectaView): число частиц на взрыв,
+// начальная скорость (единицы радиуса/с) и «сила тяжести» параболы — по мощности заряда.
+export const EJECTA_COUNT_BY_YIELD: Record<number, number> = { 1: 40, 10: 80, 100: 140 };
+export const EJECTA_SPEED_BY_YIELD: Record<number, number> = { 1: 0.12, 10: 0.2, 100: 0.32 };
+export const EJECTA_GRAVITY = 0.6; // «сила тяжести» параболы (единицы радиуса/с²)
+
 // Карта рельефа (bump) глобуса — единственная оставшаяся сетевая текстура (best-effort).
 export const EARTH_TOPO_URL = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png';
 
