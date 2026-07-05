@@ -80,9 +80,16 @@ export class DamageField {
     this.uRadius.value = ANG_BY_YIELD[yieldMt] ?? 0.05;
     this.uKind.value = kind === 'ice' ? 1 : 0;
     const prev = this.ctx.renderer.getRenderTarget();
+    const prevAutoClear = this.ctx.renderer.autoClear;
+    // autoClear=true (по умолчанию) заставил бы render() очистить цветовой буфер this.rt
+    // перед отрисовкой штампа — весь накопленный ранее урон стирался бы на каждом splat().
+    // Гасим autoClear на время рендера в rt и обязательно восстанавливаем после,
+    // иначе сломается основной рендер сцены, который полагается на autoClear=true.
+    this.ctx.renderer.autoClear = false;
     this.ctx.renderer.setRenderTarget(this.rt);
     this.ctx.renderer.render(this.stampScene, this.stampCam);
     this.ctx.renderer.setRenderTarget(prev);
+    this.ctx.renderer.autoClear = prevAutoClear;
   }
 
   // Полная очистка поля (planetReset).
