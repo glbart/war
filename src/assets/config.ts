@@ -27,6 +27,12 @@ export const MAX_CRATER_DEPTH = 0.012; // доля радиуса планеты
 export const YIELDS = [1, 10, 100] as const;
 export type Yield = (typeof YIELDS)[number];
 
+// Поправки на мощность взрыва для визуальных эффектов (размер/тайминг) — общие для
+// ExplosionView (огненный шар/ударная волна) и WaterBurstView (купол/столб/кольцо), чтобы
+// шкала "мощность → размер/время" была единообразной по всем эффектам взрыва.
+export const YIELD_SIZE_SCALE: Record<number, number> = { 1: 0.6, 10: 1.0, 100: 1.7 };
+export const YIELD_TIME_SCALE: Record<number, number> = { 1: 0.8, 10: 1.0, 100: 1.4 };
+
 export const EARTH_TEXTURE_URL =
   'https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg';
 export const EARTH_TOPO_URL = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png';

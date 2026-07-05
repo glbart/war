@@ -25,6 +25,12 @@ import {
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
 import { findFreeSlotIndex } from './SlotPool';
+import { makeDomeGeometry } from './effects/geometryUtils';
+import {
+  YIELDS,
+  YIELD_SIZE_SCALE as YS_BY_YIELD,
+  YIELD_TIME_SCALE as TS_BY_YIELD,
+} from '../assets/config';
 
 // Точные типы юниформов (как в ExplosionView) — .value остаётся number, без размытых
 // объединений перегрузок uniform().
@@ -36,11 +42,6 @@ type FloatUniform = ReturnType<typeof makeFloatUniform>;
 // Одновременных подводных взрывов немного (залпы по океану реже, чем по суше), но пул всё
 // равно на POOL_SIZE слотов — простаивающие схлопнуты в scale 0 и почти ничего не стоят.
 const POOL_SIZE = 8;
-// Те же поправки на мощность, что и в ExplosionView/particles.ts — единообразная шкала
-// "мощность → размер/тайминг" по всем визуальным эффектам взрыва.
-const YS_BY_YIELD: Record<number, number> = { 1: 0.6, 10: 1.0, 100: 1.7 };
-const TS_BY_YIELD: Record<number, number> = { 1: 0.8, 10: 1.0, 100: 1.4 };
-const YIELDS = [1, 10, 100];
 // Полуугол пенного кольца по мощности (радианы) — шире, чем горячая кайма DecalView, т.к.
 // это расходящаяся по воде рябь/пена, а не пятно ожога.
 const ANG_RING_BY_YIELD: Record<number, number> = { 1: 0.1, 10: 0.16, 100: 0.28 };
@@ -99,65 +100,12 @@ export class WaterBurstView {
 
     for (const y of YIELDS) {
       const ang = ANG_RING_BY_YIELD[y] ?? ANG_RING_BY_YIELD[10]!;
-      this.ringGeos.set(y, this.makeRingGeometry(this.unitZ, ang, 1.004));
+      // RS/AS=24/64 — тесселяция пенного кольца (грубее купола ударной волны ExplosionView,
+      // т.к. кольцо на воде тоньше и дальше от камеры в среднем).
+      this.ringGeos.set(y, makeDomeGeometry(THREE, this.unitZ, ang, 1.004, 24, 64));
     }
 
     for (let i = 0; i < POOL_SIZE; i++) this.slots.push(this.createSlot(parent));
-  }
-
-  // Касательный базис из нормали (та же формула, что в ExplosionView/DecalView — общего
-  // модуля намеренно нет, копия в 5 строк дешевле косвенности).
-  private orthoBasis(n: THREE.Vector3): [THREE.Vector3, THREE.Vector3] {
-    const { THREE } = this.ctx;
-    const t1 =
-      Math.abs(n.y) < 0.99
-        ? new THREE.Vector3().crossVectors(n, new THREE.Vector3(0, 1, 0)).normalize()
-        : new THREE.Vector3(1, 0, 0);
-    const t2 = new THREE.Vector3().crossVectors(n, t1).normalize();
-    return [t1, t2];
-  }
-
-  // Патч-купол вокруг нормали n с атрибутом aAng (0 в центре, 1 на краю) — структурно
-  // идентичен ExplosionView.makeShockwaveGeometry, используется для бегущего фронта пены.
-  private makeRingGeometry(n: THREE.Vector3, maxAng: number, R: number): THREE.BufferGeometry {
-    const { THREE } = this.ctx;
-    const RS = 24;
-    const AS = 64;
-    const [t1, t2] = this.orthoBasis(n);
-    const pos: number[] = [];
-    const aAng: number[] = [];
-    const idx: number[] = [];
-    for (let j = 0; j <= RS; j++) {
-      const ang = (maxAng * j) / RS;
-      const ca = Math.cos(ang);
-      const sa = Math.sin(ang);
-      for (let i = 0; i <= AS; i++) {
-        const phi = (2 * Math.PI * i) / AS;
-        const p = n
-          .clone()
-          .multiplyScalar(ca)
-          .addScaledVector(t1, Math.cos(phi) * sa)
-          .addScaledVector(t2, Math.sin(phi) * sa)
-          .multiplyScalar(R);
-        pos.push(p.x, p.y, p.z);
-        aAng.push(j / RS);
-      }
-    }
-    const W = AS + 1;
-    for (let j = 0; j < RS; j++) {
-      for (let i = 0; i < AS; i++) {
-        const a = j * W + i;
-        const b = a + 1;
-        const c = a + W;
-        const d = c + 1;
-        idx.push(a, c, b, b, c, d);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('aAng', new THREE.Float32BufferAttribute(aAng, 1));
-    geo.setIndex(idx);
-    return geo;
   }
 
   private createSlot(parent: THREE.Group): WaterBurstSlot {
@@ -214,7 +162,9 @@ export class WaterBurstView {
     ringMat.side = THREE.DoubleSide;
     const ring = new THREE.Mesh(this.ringGeos.get(10), ringMat);
     ring.frustumCulled = false;
-    ring.scale.setScalar(1);
+    // Схлопнуто в 0, как купол/столб (по образцу ExplosionView.wave) — простаивающий слот не
+    // должен занимать видимый объём даже при opacity>0 по ошибке.
+    ring.scale.setScalar(0);
     ring.renderOrder = 3;
     parent.add(ring);
 
@@ -304,6 +254,7 @@ export class WaterBurstView {
         slot.uDomeOp.value = 0;
         slot.column.scale.set(0, 0, 0);
         slot.uColumnOp.value = 0;
+        slot.ring.scale.setScalar(0);
         slot.uRingOp.value = 0;
       }
     }
