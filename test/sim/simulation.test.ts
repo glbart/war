@@ -66,4 +66,13 @@ describe('Simulation', () => {
     }
     expect(exploded).toBe(3);
   });
+  it('детонация над океаном даёт surface=water в explosionStarted', () => {
+    const sim = new Simulation(1);
+    const dir = lonLatToDir(-140 * (Math.PI / 180), 0); // центр Тихого
+    sim.step(0, [{ kind: 'detonate', dir, yield: 10 }]);
+    const events = sim.step(3, []); // за FLIGHT_TIME=2.6 боеголовка долетает
+    const boom = events.find((e) => e.kind === 'explosionStarted');
+    expect(boom).toBeDefined();
+    expect(boom && 'surface' in boom && boom.surface).toBe('water');
+  });
 });
