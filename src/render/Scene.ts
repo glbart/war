@@ -1,7 +1,7 @@
 // Мост между симуляцией (SimHost) и рендер-объектами three.js. Не тянет события из host
 // сам — main.ts сливает их раз за кадр через host.drainEvents() и раздаёт всем потребителям
 // (Scene и Hud), поэтому Scene получает уже готовый список через handleEvents().
-// Владеет MissileView/ExplosionView/WaterBurstView/ParticlePool/DecalView и звуком взрыва.
+// Владеет MissileView/ExplosionView/WaterBurstView/ParticlePool/EjectaView/DecalView и звуком взрыва.
 import type { ThreeCtx } from './Renderer';
 import type { GlobeView } from './GlobeView';
 import type { SimHost } from '../sim/SimHost';
@@ -13,6 +13,7 @@ import { MissileView } from './MissileView';
 import { ExplosionView } from './ExplosionView';
 import { WaterBurstView } from './WaterBurstView';
 import { ParticlePool } from './effects/particles';
+import { EjectaView } from './EjectaView';
 import { DecalView } from './DecalView';
 import type { DamageField } from './DamageField';
 import { WaterField } from './WaterField';
@@ -31,6 +32,7 @@ export class Scene {
   private readonly explosionView: ExplosionView;
   private readonly waterBurstView: WaterBurstView;
   private readonly particlePool: ParticlePool;
+  private readonly ejectaView: EjectaView;
   private readonly decalView: DecalView;
   private readonly waterField: WaterField;
   private readonly oceanShell: OceanShell;
@@ -51,6 +53,7 @@ export class Scene {
     this.explosionView = new ExplosionView(ctx, globe.spinGroup);
     this.waterBurstView = new WaterBurstView(ctx, globe.spinGroup);
     this.particlePool = new ParticlePool(ctx, globe.spinGroup);
+    this.ejectaView = new EjectaView(ctx, globe.spinGroup);
     this.decalView = new DecalView(ctx, globe);
     // Интерактивная вода: поле волн + маска берега + анимированная оболочка над глобусом.
     this.waterField = new WaterField(ctx);
@@ -103,6 +106,7 @@ export class Scene {
       void biome; // тон пыли по биому — отложено (Task 10): particlePool.emit его не принимает
       this.explosionView.spawn(dir, yieldMt, seed);
       this.particlePool.emit(dir, yieldMt, seed, this.clock);
+      this.ejectaView.emit(dir, yieldMt, seed, this.clock);
       this.decalView.spawn(dir, yieldMt, seed);
       this.damageField.splat(dir, yieldMt, surface === 'ice' ? 'ice' : 'land');
     }
@@ -123,6 +127,7 @@ export class Scene {
     this.explosionView.update(dt);
     this.waterBurstView.update(dt);
     this.particlePool.setTime(this.clock);
+    this.ejectaView.setTime(this.clock);
     this.decalView.update(dt);
   }
 }

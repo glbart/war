@@ -32,6 +32,30 @@ export const GLOBE_LON_SEG = 384;
 export const GLOBE_LAT_SEG = 192;
 export const MAX_CRATER_DEPTH = 0.012; // доля радиуса планеты
 
+// Профиль кратера суши (в долях радиуса чаши uRadius): где вал, его ширина, докуда эжекта/гарь.
+export const CRATER_RIM_FRAC = 1.18; // центр кольца-вала (снаружи чаши)
+export const CRATER_RIM_WIDTH_FRAC = 0.28; // полуширина гаусса вала
+export const CRATER_EJECTA_FRAC = 2.6; // докуда стелется выброс
+export const CRATER_SCORCH_FRAC = 2.0; // радиус мягкого гарь-градиента (шире чаши)
+export const CRATER_RIM_HEIGHT = 0.006; // высота вала над поверхностью (доля радиуса планеты)
+
+// Зоны материала кратера суши (colorNode GlobeView): цвета по возрастанию «жёсткости» к центру.
+// Гарь — мягкий градиент потемнения биома (не слэб), выброс/пыль — присыпка на валу, обнажённая
+// порода — на склоне чаши, оплавленное стекло — в самом центре. Значения (r,g,b в 0..1) —
+// стартовые, финальную настройку делает пользователь визуально.
+export const CRATER_MATERIAL_COLORS = {
+  scorch: [0.12, 0.1, 0.08], // мягкая гарь (по каналу G)
+  dust: [0.42, 0.38, 0.32], // выброс/пыль на кольце вала (по каналу A)
+  rock: [0.28, 0.24, 0.21], // обнажённая порода на склоне чаши (средний R)
+  glass: [0.1, 0.09, 0.11], // оплавленное стекло в центре (высокий R)
+} as const;
+
+// Микрорельеф нормали в damaged-зоне (procedural fbm по positionLocal): вал/стенки ловят
+// статичный свет сцены. OCTAVES — число октав fbm; STRENGTH — доля подмешивания возмущённой
+// нормали к базовой (топо-bump) под маской (R+A). Подбор силы — в визуальной приёмке.
+export const CRATER_DETAIL_OCTAVES = 3;
+export const CRATER_DETAIL_STRENGTH = 0.7;
+
 // Водная оболочка океана (OceanShell): анимированная сфера чуть выше глобуса.
 export const R_OCEAN = 1.0008; // чуть выше глобуса (r=1) — против z-fighting с ocean-цветом
 export const OCEAN_LON_SEG = 384;
@@ -47,6 +71,12 @@ export type Yield = (typeof YIELDS)[number];
 // шкала "мощность → размер/время" была единообразной по всем эффектам взрыва.
 export const YIELD_SIZE_SCALE: Record<number, number> = { 1: 0.6, 10: 1.0, 100: 1.7 };
 export const YIELD_TIME_SCALE: Record<number, number> = { 1: 0.8, 10: 1.0, 100: 1.4 };
+
+// Баллистический выброс грунта при ударе по суше (EjectaView): число частиц на взрыв,
+// начальная скорость (единицы радиуса/с) и «сила тяжести» параболы — по мощности заряда.
+export const EJECTA_COUNT_BY_YIELD: Record<number, number> = { 1: 40, 10: 80, 100: 140 };
+export const EJECTA_SPEED_BY_YIELD: Record<number, number> = { 1: 0.12, 10: 0.2, 100: 0.32 };
+export const EJECTA_GRAVITY = 0.6; // «сила тяжести» параболы (единицы радиуса/с²)
 
 // Карта рельефа (bump) глобуса — единственная оставшаяся сетевая текстура (best-effort).
 export const EARTH_TOPO_URL = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png';
