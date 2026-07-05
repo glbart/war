@@ -1,8 +1,34 @@
 // Накопительное equirect-поле урона планеты. R=глубина воронки, G=гарь, B=оплавление/полынья.
 // Splat — разовый рендер мягкого штампа в точку эпицентра (не на кадр). Кратеры сливаются
-// MAX-блендингом (наложения дают самую глубокую воронку, а не суммарную дыру).
+// поканальным max (наложения дают самую глубокую воронку, а не суммарную дыру).
+//
+// MAX через CustomBlending+MaxEquation НЕ используем: WebGPU-бэкенд three это принимает,
+// а WebGL2-бэкенд (swiftshader/headless и часть браузеров) падает с
+// "INVALID_ENUM: blendEquationSeparate" — see план Task 7, фолбэк ping-pong. Вместо блендинга
+// max считается прямо в шейдере штампа: он сэмплирует ПРЕДЫДУЩЕЕ поле (prevRt) и пишет
+// max(prev, вклад_штампа) обычным опаковым выводом — работает на обоих бэкендах.
+//
+// rt — публичный, стабильный по идентичности RenderTarget (его .texture захватывается один раз
+// в GlobeView/main.ts при старте) — именно в него всегда пишется актуальное поле. prevRt —
+// приватный снимок состояния rt ДО текущего splat: без него пришлось бы читать и писать rt
+// в одном проходе (петля обратной связи). Снимок делается дешёвым copyTextureToTexture
+// (работает на обоих бэкендах, без лишнего draw call).
 import type * as THREE from 'three/webgpu';
-import { uniform, vec4, uv, length, sub, vec2, smoothstep, float, clamp } from 'three/tsl';
+import {
+  uniform,
+  vec4,
+  uv,
+  length,
+  sub,
+  vec2,
+  smoothstep,
+  float,
+  clamp,
+  texture,
+  max,
+  sin,
+  PI,
+} from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
 import { dirToLonLat } from '../sim/geo';
@@ -22,7 +48,8 @@ type Vec2Uniform = ReturnType<typeof makeVec2Uniform>;
 type FloatUniform = ReturnType<typeof makeFloatUniform>;
 
 export class DamageField {
-  private readonly rt: THREE.RenderTarget;
+  private readonly rt: THREE.RenderTarget; // публичное поле (стабильная идентичность .texture)
+  private readonly prevRt: THREE.RenderTarget; // приватный снимок rt до текущего splat
   private readonly stampScene: THREE.Scene;
   private readonly stampCam: THREE.OrthographicCamera;
   private readonly stampMesh: THREE.Mesh;
@@ -32,11 +59,16 @@ export class DamageField {
 
   constructor(private readonly ctx: ThreeCtx) {
     const { THREE } = ctx;
-    this.rt = new THREE.RenderTarget(DAMAGE_TEX_W, DAMAGE_TEX_H, {
-      depthBuffer: false,
-      type: THREE.UnsignedByteType,
-    });
-    this.rt.texture.wrapS = THREE.RepeatWrapping; // корректный wrap по шву долготы
+    const makeRT = (): THREE.RenderTarget => {
+      const rt = new THREE.RenderTarget(DAMAGE_TEX_W, DAMAGE_TEX_H, {
+        depthBuffer: false,
+        type: THREE.UnsignedByteType,
+      });
+      rt.texture.wrapS = THREE.RepeatWrapping; // корректный wrap по шву долготы
+      return rt;
+    };
+    this.rt = makeRT();
+    this.prevRt = makeRT();
 
     this.stampScene = new THREE.Scene();
     // Орто-камера смотрит вдоль -Z; квад лежит в плоскости z=0, камера вынесена на z=1 с запасом
@@ -49,20 +81,23 @@ export class DamageField {
     this.uRadius = makeFloatUniform(0.05);
     this.uKind = makeFloatUniform(0);
 
-    // Профиль штампа: чаша глубины по расстоянию до центра (в UV, с поправкой на аспект 2:1).
-    const d = length(sub(uv(), this.uCenter).mul(vec2(2, 1)));
+    // Профиль штампа: чаша глубины по угловому расстоянию до центра. Аспект equirect 2:1 даёт
+    // базовый множитель 2 по U, но у полюсов долгота «сжимается» на cos(lat) — без поправки
+    // круглая воронка превращается в вытянутую к полюсу звезду. cos(lat) = sin(v·π), где
+    // v = uv().y, lat = π/2 − v·π — так что множитель по U масштабируем на sin(v·π).
+    const latWeight = sin(uv().y.mul(PI));
+    const d = length(sub(uv(), this.uCenter).mul(vec2(float(2).mul(latWeight), 1)));
     const bowl = smoothstep(this.uRadius, float(0), d); // 1 в центре → 0 на краю
     const depth = clamp(bowl, 0, 1);
     const char = clamp(bowl.mul(0.8), 0, 1);
     const melt = clamp(bowl.mul(this.uKind), 0, 1); // только лёд
+    const stamp = vec4(depth, char, melt, 1);
+    // Поканальный max с предыдущим состоянием поля (см. комментарий вверху файла про
+    // WebGL2-несовместимость CustomBlending+MaxEquation) — обычный опаковый вывод.
+    const prevSample = texture(this.prevRt.texture, uv());
     const mat = new THREE.MeshBasicNodeMaterial();
-    mat.colorNode = vec4(depth, char, melt, 1);
+    mat.colorNode = max(prevSample, stamp);
     mat.transparent = false;
-    // MAX-блендинг по всем каналам: наложения берут максимум (глубже/чернее/растопленнее).
-    mat.blending = THREE.CustomBlending;
-    mat.blendEquation = THREE.MaxEquation;
-    mat.blendSrc = THREE.OneFactor;
-    mat.blendDst = THREE.OneFactor;
 
     this.stampMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
     this.stampMesh.position.set(0.5, 0.5, 0);
@@ -79,7 +114,12 @@ export class DamageField {
     this.uCenter.value.set((lon + Math.PI) / (2 * Math.PI), (Math.PI / 2 - lat) / Math.PI);
     this.uRadius.value = ANG_BY_YIELD[yieldMt] ?? 0.05;
     this.uKind.value = kind === 'ice' ? 1 : 0;
-    const prev = this.ctx.renderer.getRenderTarget();
+
+    // Снимок текущего поля в prevRt ДО перезаписи rt — материал штампа читает именно его,
+    // иначе rt читался бы и писался в одном проходе (петля обратной связи).
+    this.ctx.renderer.copyTextureToTexture(this.rt.texture, this.prevRt.texture);
+
+    const prevTarget = this.ctx.renderer.getRenderTarget();
     const prevAutoClear = this.ctx.renderer.autoClear;
     // autoClear=true (по умолчанию) заставил бы render() очистить цветовой буфер this.rt
     // перед отрисовкой штампа — весь накопленный ранее урон стирался бы на каждом splat().
@@ -88,15 +128,18 @@ export class DamageField {
     this.ctx.renderer.autoClear = false;
     this.ctx.renderer.setRenderTarget(this.rt);
     this.ctx.renderer.render(this.stampScene, this.stampCam);
-    this.ctx.renderer.setRenderTarget(prev);
+    this.ctx.renderer.setRenderTarget(prevTarget);
     this.ctx.renderer.autoClear = prevAutoClear;
   }
 
-  // Полная очистка поля (planetReset).
+  // Полная очистка поля (planetReset) — оба буфера, иначе следующий splat подмешает
+  // снимок старого prevRt.
   clear(): void {
-    const prev = this.ctx.renderer.getRenderTarget();
+    const prevTarget = this.ctx.renderer.getRenderTarget();
     this.ctx.renderer.setRenderTarget(this.rt);
     this.ctx.renderer.clearColor();
-    this.ctx.renderer.setRenderTarget(prev);
+    this.ctx.renderer.setRenderTarget(this.prevRt);
+    this.ctx.renderer.clearColor();
+    this.ctx.renderer.setRenderTarget(prevTarget);
   }
 }
