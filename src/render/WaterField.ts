@@ -61,6 +61,10 @@ type FloatUniform = ReturnType<typeof makeFloatUniform>;
 export class WaterField {
   private readonly rtA: THREE.RenderTarget;
   private readonly rtB: THREE.RenderTarget;
+  // Канонический выходной RT: его .texture имеет СТАБИЛЬНУЮ идентичность на всю жизнь объекта
+  // (как rt в DamageField). Внутренний ping-pong rtA/rtB альтернирует, поэтому в конце каждого
+  // step() свежее поле блитится сюда — потребитель (OceanShell) захватывает .texture один раз.
+  private readonly stableRt: THREE.RenderTarget;
   private readonly stampScene: THREE.Scene;
   private readonly stampCam: THREE.OrthographicCamera;
   private readonly stampMesh: THREE.Mesh;
@@ -94,6 +98,15 @@ export class WaterField {
     };
     this.rtA = makeRT();
     this.rtB = makeRT();
+    this.stableRt = makeRT();
+    // Штиль до первого step() — иначе первый кадр OceanShell прочитал бы неинициализированный мусор
+    // (важно и в !supported: step() = no-op, но stableRt валиден и содержит нули).
+    {
+      const prevTarget = ctx.renderer.getRenderTarget();
+      ctx.renderer.setRenderTarget(this.stableRt);
+      ctx.renderer.clearColor();
+      ctx.renderer.setRenderTarget(prevTarget);
+    }
 
     this.stampScene = new THREE.Scene();
     // Орто-камера смотрит вдоль -Z; квад в плоскости z=0, камера на z=1, near/far по обе стороны
@@ -167,9 +180,10 @@ export class WaterField {
     );
   }
 
-  // Актуальное поле (RT с самым свежим кадром) — стабильная идентичность в пределах чётности.
+  // Канонический выход: стабильная идентичность текстуры на всю жизнь объекта (потребитель
+  // захватывает её один раз). Свежее поле блитится сюда в конце каждого step().
   get texture(): THREE.Texture {
-    return this.aIsCurrent ? this.rtA.texture : this.rtB.texture;
+    return this.stableRt.texture;
   }
 
   // Один шаг симуляции: читаем current-RT нужным материалом, пишем в другой, переключаем чётность.
@@ -192,6 +206,10 @@ export class WaterField {
     this.ctx.renderer.setRenderTarget(prevTarget);
     this.ctx.renderer.autoClear = prevAutoClear;
 
+    // Свежий кадр (в dst) блитим в канонический stableRt — дешёвый GPU-блит раз в кадр (тот же
+    // приём copyTextureToTexture, что в DamageField). Так .texture держит стабильную идентичность.
+    this.ctx.renderer.copyTextureToTexture(dst.texture, this.stableRt.texture);
+
     // Импульс применён за этот шаг — гасим, чтобы не впечатывать его повторно каждый кадр.
     this.uSplatStr.value = 0;
     this.aIsCurrent = !this.aIsCurrent; // ping-pong: свежий кадр теперь в dst
@@ -205,10 +223,11 @@ export class WaterField {
     this.uSplatRad.value = radius;
   }
 
-  // Полная очистка обоих буферов → штиль (planetReset).
+  // Полная очистка всех буферов → штиль (planetReset). stableRt тоже — иначе .texture показал бы
+  // старое поле до первого step() после сброса.
   clear(): void {
     const prevTarget = this.ctx.renderer.getRenderTarget();
-    for (const rt of [this.rtA, this.rtB]) {
+    for (const rt of [this.rtA, this.rtB, this.stableRt]) {
       this.ctx.renderer.setRenderTarget(rt);
       this.ctx.renderer.clearColor();
     }
