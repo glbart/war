@@ -28,3 +28,8 @@ export function latToTileYf(latRad: number, n: number): number {
 export function tileYfToLat(yf: number, n: number): number {
   return Math.atan(Math.sinh(Math.PI * (1 - (2 * yf) / n)));
 }
+
+// Обратна lonLatToDir: широта из y, долгота из atan2(-z, x) (та же ось-конвенция).
+export function dirToLonLat(dir: Vec3): { lon: number; lat: number } {
+  return { lon: Math.atan2(-dir.z, dir.x), lat: Math.asin(clamp(dir.y, -1, 1)) };
+}

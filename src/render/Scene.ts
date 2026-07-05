@@ -1,17 +1,20 @@
 // Мост между симуляцией (SimHost) и рендер-объектами three.js. Не тянет события из host
 // сам — main.ts сливает их раз за кадр через host.drainEvents() и раздаёт всем потребителям
 // (Scene и Hud), поэтому Scene получает уже готовый список через handleEvents().
-// Владеет MissileView/ExplosionView/ParticlePool/DecalView и звуком взрыва.
+// Владеет MissileView/ExplosionView/WaterBurstView/ParticlePool/DecalView и звуком взрыва.
 import type { ThreeCtx } from './Renderer';
 import type { GlobeView } from './GlobeView';
 import type { SimHost } from '../sim/SimHost';
 import type { SimEvent } from '../sim/events';
 import type { Vec3 } from '../sim/geo';
+import type { Surface, Biome } from '../sim/material';
 import type { CameraRig } from '../input/CameraRig';
 import { MissileView } from './MissileView';
 import { ExplosionView } from './ExplosionView';
+import { WaterBurstView } from './WaterBurstView';
 import { ParticlePool } from './effects/particles';
 import { DecalView } from './DecalView';
+import type { DamageField } from './DamageField';
 import { playBoom } from './effects/sound';
 
 // Порт shake = Math.max(shake, 0.02 * ys), ys = {1:0.6, 10:1.0, 100:1.7}[yieldMt]
@@ -22,6 +25,7 @@ const SHAKE_PER_UNIT = 0.02;
 export class Scene {
   private readonly missileView: MissileView;
   private readonly explosionView: ExplosionView;
+  private readonly waterBurstView: WaterBurstView;
   private readonly particlePool: ParticlePool;
   private readonly decalView: DecalView;
   private clock = 0; // общие часы рендера (секунды); база спавна частиц и uTime шейдера
@@ -34,10 +38,12 @@ export class Scene {
     globe: GlobeView,
     host: SimHost,
     private readonly rig: CameraRig,
+    private readonly damageField: DamageField,
   ) {
     void host; // пока не используется — события приходят через handleEvents(), не через host
     this.missileView = new MissileView(ctx, globe.spinGroup);
     this.explosionView = new ExplosionView(ctx, globe.spinGroup);
+    this.waterBurstView = new WaterBurstView(ctx, globe.spinGroup);
     this.particlePool = new ParticlePool(ctx, globe.spinGroup);
     this.decalView = new DecalView(ctx, globe);
   }
@@ -56,24 +62,33 @@ export class Scene {
         break;
       case 'explosionStarted':
         this.missileView.despawn(event.id);
-        this.startExplosion(event.dir, event.yield, event.seed);
+        this.startExplosion(event.dir, event.yield, event.seed, event.surface, event.biome);
         break;
       case 'planetReset':
         this.decalView.clear();
+        this.damageField.clear();
         break;
       default:
         break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
     }
   }
 
-  // Запускает визуал взрыва (тряска + огненный шар/волна + частицы гриба + кратер-декаль +
-  // звук). Отдельный метод, чтобы его мог дёрнуть и обработчик события, и (при ручной/headless-
-  // проверке) прямой вызов без ожидания полёта ракеты.
-  startExplosion(dir: Vec3, yieldMt: number, seed: number): void {
+  // Запускает визуал взрыва (тряска + звук + маршрутизация по surface). Вода — купол брызг/
+  // столб/пенное кольцо (WaterBurstView), без DamageField (вода смыкается, следа нет); суша/лёд —
+  // огненный шар/волна + частицы гриба + горячая кайма + splat DamageField (постоянный кратер/
+  // обугливание/полынья копится в поле, а не в decal-меше). Отдельный метод, чтобы его мог дёрнуть
+  // и обработчик события, и (при ручной/headless-проверке) прямой вызов без ожидания полёта ракеты.
+  startExplosion(dir: Vec3, yieldMt: number, seed: number, surface: Surface, biome: Biome): void {
     this.triggerShake(yieldMt);
-    this.explosionView.spawn(dir, yieldMt, seed);
-    this.particlePool.emit(dir, yieldMt, seed, this.clock);
-    this.decalView.spawn(dir, yieldMt, seed);
+    if (surface === 'water') {
+      this.waterBurstView.spawn(dir, yieldMt, seed);
+    } else {
+      void biome; // тон пыли по биому — отложено (Task 10): particlePool.emit его не принимает
+      this.explosionView.spawn(dir, yieldMt, seed);
+      this.particlePool.emit(dir, yieldMt, seed, this.clock);
+      this.decalView.spawn(dir, yieldMt, seed);
+      this.damageField.splat(dir, yieldMt, surface === 'ice' ? 'ice' : 'land');
+    }
     playBoom(yieldMt);
   }
 
@@ -87,6 +102,7 @@ export class Scene {
     this.clock += dt;
     this.missileView.update(dt);
     this.explosionView.update(dt);
+    this.waterBurstView.update(dt);
     this.particlePool.setTime(this.clock);
     this.decalView.update(dt);
   }

@@ -13,76 +13,23 @@ import {
   oneMinus,
   abs,
   vec4,
+  vec3,
   float,
+  clamp,
+  mix,
+  smoothstep,
+  texture,
+  uv,
+  positionLocal,
+  normalLocal,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
-import { TEX_W, TEX_H, EARTH_TEXTURE_URL, EARTH_TOPO_URL } from '../assets/config';
+import { EARTH_TOPO_URL, GLOBE_LON_SEG, GLOBE_LAT_SEG, MAX_CRATER_DEPTH } from '../assets/config';
+import { buildBiomeCanvas } from './MaterialGlobe';
 
-const EARTH_LOAD_TIMEOUT_MS = 15000;
 const ATMOSPHERE_RADIUS = 1.06;
 const ATMOSPHERE_FRESNEL_POWER = 4.5;
 const ATMOSPHERE_INTENSITY = 0.55;
-
-// Процедурный фолбэк текстуры Земли (порт drawProceduralEarth(), строки ~144-167 эталона).
-// Эталон использует собственный seeded LCG (не Math.random) ради стабильной картинки
-// фолбэка между запусками — сохраняем эту деталь один в один.
-function drawProceduralEarth(ctx: CanvasRenderingContext2D): void {
-  const g = ctx.createLinearGradient(0, 0, 0, TEX_H);
-  g.addColorStop(0, '#0a2a52');
-  g.addColorStop(0.5, '#0e3a6e');
-  g.addColorStop(1, '#0a2a52');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, TEX_W, TEX_H);
-
-  let seed = 1337;
-  const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  ctx.globalAlpha = 0.9;
-  for (let c = 0; c < 14; c++) {
-    const cx = rnd() * TEX_W;
-    const cy = TEX_H * (0.18 + rnd() * 0.64);
-    const hue = 80 + rnd() * 40;
-    const size = 60 + rnd() * 140;
-    for (let b = 0; b < 40; b++) {
-      const a = rnd() * Math.PI * 2;
-      const d = rnd() * size;
-      ctx.fillStyle = `hsl(${hue + rnd() * 20}, ${35 + rnd() * 20}%, ${28 + rnd() * 14}%)`;
-      ctx.beginPath();
-      ctx.ellipse(
-        (cx + Math.cos(a) * d * 1.6 + TEX_W) % TEX_W,
-        cy + Math.sin(a) * d,
-        20 + rnd() * 50,
-        14 + rnd() * 34,
-        rnd() * Math.PI,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-    }
-  }
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = '#e8f0f6';
-  ctx.fillRect(0, 0, TEX_W, TEX_H * 0.05);
-  ctx.fillRect(0, TEX_H * 0.95, TEX_W, TEX_H * 0.05);
-}
-
-// Грузит картинку Blue Marble; резолвится в null при ошибке или по таймауту 15с
-// (порт loadEarthTexture(), строки ~170-179 эталона) — тогда включаем процедурный фолбэк.
-function loadEarthImage(): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    const fallback = setTimeout(() => resolve(null), EARTH_LOAD_TIMEOUT_MS);
-    img.onload = () => {
-      clearTimeout(fallback);
-      resolve(img);
-    };
-    img.onerror = () => {
-      clearTimeout(fallback);
-      resolve(null);
-    };
-    img.src = EARTH_TEXTURE_URL;
-  });
-}
 
 export class GlobeView {
   readonly earthMesh: THREE.Mesh;
@@ -91,17 +38,47 @@ export class GlobeView {
 
   private readonly readyPromise: Promise<void>;
 
-  constructor(ctx: ThreeCtx) {
+  constructor(ctx: ThreeCtx, damageTex: THREE.Texture) {
     const { THREE } = ctx;
 
     const earthMaterial = new THREE.MeshPhongNodeMaterial({ shininess: 12, specular: 0x223344 });
+
+    // Биом-текстура строится синхронно (нужна сразу для colorNode материала); карта рельефа
+    // (bump) грузится отдельно и асинхронно в loadTexture() и на геометрию/цвет не влияет.
+    const biomeTex = new THREE.CanvasTexture(buildBiomeCanvas());
+    biomeTex.colorSpace = THREE.SRGBColorSpace;
+    biomeTex.anisotropy = ctx.renderer.getMaxAnisotropy();
+
+    // Поле урона (Task 7): R=глубина воронки, G=гарь, B=оплавление/полынья.
+    const dmg = texture(damageTex, uv());
+    const depth = dmg.r;
+    // Вдавливание воронки: сдвиг вершины внутрь вдоль нормали. Обязательно локальные
+    // position/normal (не world) — сфера описана в объектных координатах.
+    earthMaterial.positionNode = positionLocal.sub(
+      normalLocal.mul(depth.mul(float(MAX_CRATER_DEPTH))),
+    );
+
+    // Перекраска: биом-цвет → копоть по каналу G → полынья по каналу B (Task 11).
+    const base = texture(biomeTex, uv()).rgb;
+    const charred = mix(base, vec3(0.06, 0.05, 0.05), clamp(dmg.g, 0, 1));
+    // Профиль B — «чаша»: максимум в центре воронки, спад к краю пятна. Поэтому цвет полыньи
+    // задаём двумя порогами по возрастанию B: сперва суша светлеет до битого льда (кайма),
+    // затем в центре (где B выше всего) темнеет до открытой воды.
+    const iceRim = smoothstep(0.15, 0.4, dmg.b); // 0..1: суша → светлая ледяная крошка
+    const openWater = smoothstep(0.45, 0.75, dmg.b); // 0..1: кайма льда → тёмная вода в центре
+    const withIceRim = mix(charred, vec3(0.7, 0.78, 0.85), iceRim);
+    const molten = mix(withIceRim, vec3(0.05, 0.12, 0.2), openWater);
+    earthMaterial.colorNode = molten;
 
     this.tiltGroup = new THREE.Group();
     this.spinGroup = new THREE.Group();
     this.tiltGroup.add(this.spinGroup);
     ctx.scene.add(this.tiltGroup);
 
-    this.earthMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), earthMaterial);
+    this.earthMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1, GLOBE_LON_SEG, GLOBE_LAT_SEG),
+      earthMaterial,
+    );
     this.spinGroup.add(this.earthMesh);
 
     this.spinGroup.add(this.buildAtmosphere(ctx));
@@ -128,31 +105,13 @@ export class GlobeView {
     return new THREE.Mesh(new THREE.SphereGeometry(ATMOSPHERE_RADIUS, 64, 48), atmoMaterial);
   }
 
-  // Грузит текстуру Земли в canvas (Blue Marble либо процедурный фолбэк), заворачивает
-  // в CanvasTexture и подставляет в материал; отдельно (не блокируя готовность) грузит
-  // карту рельефа (bump) — порт строк ~181-201 эталона.
+  // Биом-текстура уже подставлена в colorNode материала синхронно в конструкторе; здесь только
+  // догружаем карту рельефа (bump) — не блокирует готовность колора/деформации.
   private async loadTexture(
     ctx: ThreeCtx,
     earthMaterial: THREE.MeshPhongNodeMaterial,
   ): Promise<void> {
     const { THREE } = ctx;
-    const img = await loadEarthImage();
-
-    const canvas = document.createElement('canvas');
-    canvas.width = TEX_W;
-    canvas.height = TEX_H;
-    const canvasCtx = canvas.getContext('2d');
-    if (canvasCtx) {
-      if (img) canvasCtx.drawImage(img, 0, 0, TEX_W, TEX_H);
-      else drawProceduralEarth(canvasCtx);
-    }
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = ctx.renderer.getMaxAnisotropy();
-    earthMaterial.map = tex;
-    earthMaterial.needsUpdate = true;
-
     new THREE.TextureLoader().load(EARTH_TOPO_URL, (topo) => {
       earthMaterial.bumpMap = topo;
       earthMaterial.bumpScale = 0.6;
@@ -160,7 +119,8 @@ export class GlobeView {
     });
   }
 
-  // Резолвится, когда текстура Земли (или процедурный фолбэк) готова и подставлена в материал.
+  // Резолвится сразу же (биом-текстура и узлы материала готовы синхронно в конструкторе);
+  // оставлено для совместимости вызова в main.ts (await до включения управления камерой).
   whenReady(): Promise<void> {
     return this.readyPromise;
   }

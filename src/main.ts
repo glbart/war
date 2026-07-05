@@ -1,6 +1,7 @@
 import { createRenderer } from './render/Renderer';
 import { GameLoop } from './core/GameLoop';
 import { GlobeView } from './render/GlobeView';
+import { DamageField } from './render/DamageField';
 import { TileLayers } from './render/TileLayers';
 import { Scene } from './render/Scene';
 import { CameraRig } from './input/CameraRig';
@@ -38,9 +39,13 @@ async function boot() {
   threeScene.add(sun);
   threeScene.add(new THREE.AmbientLight(0x8899aa, 1.5));
 
+  // Поле урона планеты (Task 7): equirect RGBA8 — заполняется splat() в Scene (Task 9),
+  // здесь только создаём и прокидываем текстуру в материал глобуса.
+  const damageField = new DamageField(renderer.ctx);
+
   // Глобус + атмосфера; дожидаемся готовности текстуры (или процедурного фолбэка),
   // прежде чем включать управление камерой и цикл рендера.
-  const globe = new GlobeView(renderer.ctx);
+  const globe = new GlobeView(renderer.ctx, damageField.texture);
   await globe.whenReady();
 
   const rig = new CameraRig(renderer.ctx, globe);
@@ -49,6 +54,14 @@ async function boot() {
   // накапливаются до drainEvents() — сливаем их раз за кадр рендера и раздаём Scene и Hud.
   const host = new LocalSimHost(SIM_SEED);
   const hud = new Hud(host);
+
+  // Dev-инструменты headless-приёмки (__strike/__reset/__lookAt на window) — только
+  // в dev-сборке; динамический импорт под import.meta.env.DEV гарантирует, что Vite
+  // вырежет модуль и хуки из прод-бандла (dead-code elimination).
+  if (import.meta.env.DEV) {
+    const { installDevHooks } = await import('./debug/devHooks');
+    installDevHooks(host, globe);
+  }
 
   // Первый пользовательский жест разрешает WebAudio (браузеры не дают запустить
   // AudioContext без него) — как в эталоне (ensureAudio() на pointerdown).
@@ -60,7 +73,7 @@ async function boot() {
   });
 
   // Мост sim↔render: ракеты, взрывы (огонь/волна/частицы), кратеры-декали, тряска камеры, звук.
-  const scene = new Scene(renderer.ctx, globe, host, rig);
+  const scene = new Scene(renderer.ctx, globe, host, rig, damageField);
 
   // Тайлы спутниковых снимков + границ/названий поверх глобуса.
   const tiles = new TileLayers(renderer.ctx, globe, rig);

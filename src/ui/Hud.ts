@@ -56,8 +56,8 @@ export class Hud {
       </div>
       <button id="reset">Восстановить планету</button>
       <button id="labels" class="active" style="width: 100%; margin-top: 8px">Границы и названия: вкл</button>
-      <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар<br>Приблизься — подгрузятся спутниковые снимки</p>
-      <p id="credit">Снимки: Esri World Imagery</p>
+      <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар</p>
+      <p id="credit">Границы и названия: Esri</p>
     `;
     document.body.appendChild(root);
 

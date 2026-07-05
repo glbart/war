@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   lonLatToDir,
+  dirToLonLat,
   dot,
   angleBetween,
   latToTileYf,
@@ -36,5 +37,18 @@ describe('geo', () => {
   });
   it('MAX_MERC_LAT около 85.05°', () => {
     expect((MAX_MERC_LAT * 180) / Math.PI).toBeCloseTo(85.0511, 3);
+  });
+  it('dirToLonLat обратна lonLatToDir', () => {
+    for (const [lon, lat] of [
+      [0, 0],
+      [1.2, -0.5],
+      [-2.7, 1.1],
+      [Math.PI - 0.01, 0.3],
+    ] as const) {
+      const d = lonLatToDir(lon, lat);
+      const r = dirToLonLat(d);
+      expect(r.lon).toBeCloseTo(lon, 6);
+      expect(r.lat).toBeCloseTo(lat, 6);
+    }
   });
 });

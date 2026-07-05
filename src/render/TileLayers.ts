@@ -1,5 +1,6 @@
-// Стриминг тайлов поверх глобуса: спутниковые снимки Esri (только вблизи) и
-// слой границ/названий (на любом зуме). Порт reference/earth-nuke.html строк ~203-370.
+// Стриминг тайлов поверх глобуса: слой границ/названий (на любом зуме). Порт
+// reference/earth-nuke.html строк ~203-370 (спутниковый слой снимков убран — глобус
+// теперь стилизованная биом-текстура, см. MaterialGlobe.ts).
 //
 // Геометрия тайла — изогнутый патч (SEG×SEG сетка на сфере), LOD выбирается по
 // дистанции камеры (zoom), набор видимых тайлов — по угловому радиусу области
@@ -10,14 +11,13 @@ import type * as THREE from 'three/webgpu';
 import type { ThreeCtx } from './Renderer';
 import type { GlobeView } from './GlobeView';
 import type { CameraRig } from '../input/CameraRig';
-import { TILE_IMAGERY_URL, TILE_LABELS_URL } from '../assets/config';
+import { TILE_LABELS_URL } from '../assets/config';
 import { latToTileYf, tileYfToLat, lonLatToDir, angleBetween } from '../sim/geo';
 
 const SEG = 8; // сегментов на сторону патча тайла
 const MAX_TILES_PER_LAYER = 160;
 const CACHE_MAX = 400;
 const CACHE_TRIM_TO = 300;
-const IMAGERY_ACTIVE_ZOOM = 1.2; // imagery активен при (zoom-1) <= этого значения
 
 type TileCacheEntry = THREE.Texture | 'loading' | 'error';
 
@@ -32,7 +32,7 @@ interface TileLayerState {
   readonly name: string;
   readonly url: (z: number, x: number, y: number) => string;
   readonly group: THREE.Group;
-  readonly unlit: boolean; // true → MeshBasicNodeMaterial (labels), false → MeshPhongNodeMaterial (imagery)
+  readonly unlit: boolean; // true → MeshBasicNodeMaterial (labels)
   readonly rOff: number; // сдвиг радиуса над поверхностью, чтобы слой не z-fighting'ил с нижним
   readonly minZ: number;
   enabled: boolean;
@@ -56,9 +56,7 @@ export class TileLayers {
   ) {
     const { THREE } = ctx;
 
-    const tilesGroup = new THREE.Group(); // тайлы снимков поверх глобуса
-    const overlayGroup = new THREE.Group(); // границы и названия поверх снимков
-    globe.spinGroup.add(tilesGroup);
+    const overlayGroup = new THREE.Group(); // границы и названия поверх глобуса
     globe.spinGroup.add(overlayGroup);
 
     this.raycaster = new THREE.Raycaster();
@@ -66,19 +64,6 @@ export class TileLayers {
     this.tileLoader.setCrossOrigin('anonymous');
 
     this.layers = [
-      {
-        name: 'imagery',
-        url: TILE_IMAGERY_URL,
-        group: tilesGroup,
-        unlit: false,
-        rOff: 0,
-        minZ: 3,
-        enabled: true,
-        active: (s) => s <= IMAGERY_ACTIVE_ZOOM,
-        cache: new Map(),
-        meshes: new Map(),
-        lastDesired: new Set(),
-      },
       {
         name: 'labels',
         url: TILE_LABELS_URL,
@@ -95,7 +80,7 @@ export class TileLayers {
     ];
   }
 
-  // Суммарное число активных мешей тайлов по обоим слоям (для отладки/HUD).
+  // Суммарное число активных мешей тайлов (для отладки/HUD).
   get meshCount(): number {
     let n = 0;
     for (const layer of this.layers) n += layer.meshes.size;

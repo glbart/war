@@ -6,6 +6,7 @@ import { createCities, type City } from './cities';
 import type { Command } from './commands';
 import type { SimEvent } from './events';
 import { YIELDS, type Yield } from '../assets/config';
+import { materialAtDir } from './material';
 
 // Время полёта боеголовки до детонации, сек (порт таймингов демо).
 const FLIGHT_TIME = 2.6;
@@ -128,7 +129,16 @@ export class Simulation {
       const ts = TS_TABLE[w.yield];
       const { hits, totalDeaths } = computeCasualties(this.cities, w.dir, w.yield, ts);
 
-      events.push({ kind: 'explosionStarted', id, dir: w.dir, yield: w.yield, seed: w.seed });
+      const { surface, biome } = materialAtDir(w.dir);
+      events.push({
+        kind: 'explosionStarted',
+        id,
+        dir: w.dir,
+        yield: w.yield,
+        seed: w.seed,
+        surface,
+        biome,
+      });
       for (const h of hits) {
         events.push({ kind: 'cityHit', name: h.name, deaths: h.deaths, atWaveTime: h.atWaveTime });
       }

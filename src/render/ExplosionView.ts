@@ -24,6 +24,12 @@ import {
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
 import { findFreeSlotIndex } from './SlotPool';
+import { makeDomeGeometry } from './effects/geometryUtils';
+import {
+  YIELDS,
+  YIELD_SIZE_SCALE as YS_BY_YIELD,
+  YIELD_TIME_SCALE as TS_BY_YIELD,
+} from '../assets/config';
 
 // Точные типы юниформов (ReturnType неперегруженной функции — конкретный UniformNode вместо
 // размытого объединения перегрузок uniform), чтобы .value был number / Vector3.
@@ -40,9 +46,6 @@ type Vec3Uniform = ReturnType<typeof makeVec3Uniform>;
 // дать до ~десятка сразу; 12 слотов покрывают это без визуальных провалов. Простаивающие слоты
 // схлопнуты в точку (scale 0, uOp 0) и почти ничего не стоят — меши/пайплайны построены раз.
 const POOL_SIZE = 12;
-const YS_BY_YIELD: Record<number, number> = { 1: 0.6, 10: 1.0, 100: 1.7 };
-const TS_BY_YIELD: Record<number, number> = { 1: 0.8, 10: 1.0, 100: 1.4 };
-const YIELDS = [1, 10, 100];
 
 interface ExplosionSlot {
   readonly fireball: THREE.Mesh;
@@ -79,64 +82,12 @@ export class ExplosionView {
 
     for (const y of YIELDS) {
       const ys = YS_BY_YIELD[y] ?? 1;
-      this.waveGeos.set(y, this.makeShockwaveGeometry(this.unitZ, 0.45 * ys, 1.008));
+      // RS/AS=40/96 — тесселяция купола ударной волны, сохранена в точности как раньше
+      // (это уже принятый и работающий визуал, менять нельзя).
+      this.waveGeos.set(y, makeDomeGeometry(THREE, this.unitZ, 0.45 * ys, 1.008, 40, 96));
     }
     const fireballGeo = new THREE.SphereGeometry(1, 48, 32);
     for (let i = 0; i < POOL_SIZE; i++) this.slots.push(this.createSlot(parent, fireballGeo));
-  }
-
-  // Касательный базис из нормали (порт orthoBasis ~452-457).
-  private orthoBasis(n: THREE.Vector3): [THREE.Vector3, THREE.Vector3] {
-    const { THREE } = this.ctx;
-    const t1 =
-      Math.abs(n.y) < 0.99
-        ? new THREE.Vector3().crossVectors(n, new THREE.Vector3(0, 1, 0)).normalize()
-        : new THREE.Vector3(1, 0, 0);
-    const t2 = new THREE.Vector3().crossVectors(n, t1).normalize();
-    return [t1, t2];
-  }
-
-  // Сферический купол вокруг нормали n, полуугол maxAng, радиус R; атрибут aAng — доля углового
-  // расстояния до края (порт makeShockwaveGeometry ~495-524). Строится один раз на мощность.
-  private makeShockwaveGeometry(n: THREE.Vector3, maxAng: number, R: number): THREE.BufferGeometry {
-    const { THREE } = this.ctx;
-    const RS = 40;
-    const AS = 96;
-    const [t1, t2] = this.orthoBasis(n);
-    const pos: number[] = [];
-    const aAng: number[] = [];
-    const idx: number[] = [];
-    for (let j = 0; j <= RS; j++) {
-      const ang = (maxAng * j) / RS;
-      const ca = Math.cos(ang);
-      const sa = Math.sin(ang);
-      for (let i = 0; i <= AS; i++) {
-        const phi = (2 * Math.PI * i) / AS;
-        const p = n
-          .clone()
-          .multiplyScalar(ca)
-          .addScaledVector(t1, Math.cos(phi) * sa)
-          .addScaledVector(t2, Math.sin(phi) * sa)
-          .multiplyScalar(R);
-        pos.push(p.x, p.y, p.z);
-        aAng.push(j / RS);
-      }
-    }
-    const W = AS + 1;
-    for (let j = 0; j < RS; j++) {
-      for (let i = 0; i < AS; i++) {
-        const a = j * W + i;
-        const b = a + 1;
-        const c = a + W;
-        const d = c + 1;
-        idx.push(a, c, b, b, c, d);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('aAng', new THREE.Float32BufferAttribute(aAng, 1));
-    geo.setIndex(idx);
-    return geo;
   }
 
   private createSlot(parent: THREE.Group, fireballGeo: THREE.SphereGeometry): ExplosionSlot {

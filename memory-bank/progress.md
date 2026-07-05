@@ -4,9 +4,36 @@ _Обновлено: 2026-07-05_
 
 ## Статус
 
-**Этап 1 (порт на новую архитектуру): завершён.** Демо `reference/earth-nuke.html` полностью
-перенесено на Vite + TypeScript + ECS (miniplex) + WebGPU-рендерер (с откатом на WebGL2),
-паритет подтверждён headless-скриншотами и стресс-тестом (см. `.superpowers/sdd/task-10-report.md`).
+**Этап 1 (порт на новую архитектуру): завершён** (влит в master).
+
+**Фича «Материал поверхности и разрушаемость»: реализована** (ветка `feat/material-destructibility`,
+ждёт финального ревью+мёржа). См. раздел ниже.
+
+## Фича материала/разрушаемости (2026-07-05)
+
+- ✅ **Материал в sim** (авторитетно, без изменения геймплея): `sim/geo.ts::dirToLonLat`;
+  `sim/landmask.ts`+`landmask.data.ts` (реальные материки, запечённая маска 512×256 из Blue Marble
+  через `scripts/gen-landmask.mjs`, jpeg-js); `sim/material.ts` (`materialAt`/`materialAtDir` →
+  `Surface` land/water/ice + `Biome` по широтным поясам+шум); событие `explosionStarted` несёт
+  `surface`/`biome`.
+- ✅ **Стилизованный биом-глобус**: `render/MaterialGlobe.ts` (процедурная equirect биом-текстура из
+  `materialAt`+`biomeRGB`), палитра в `assets/config.ts`; спутниковый слой Esri убран, подписи
+  оставлены; HUD больше не обещает снимки.
+- ✅ **Разрушаемость (GPU displacement)**: `render/DamageField.ts` — equirect поле урона
+  (R=глубина/G=гарь/B=оплавление), splat воронки на детонацию, **ping-pong max** (WebGL2-совместимо,
+  без CustomBlending/MaxEquation), `cos(lat)`-коррекция воронки у полюсов; глобус (`render/GlobeView.ts`,
+  плотная сетка 384×192) вершинно вдавливается по полю урона и перекрашивается (гарь по G, полынья по B).
+  Кратер-декаль из `DecalView` вытеснен полем; осталась только горячая остывающая кайма.
+- ✅ **Взрывы по материалу**: маршрутизация в `render/Scene.ts` по `surface`; вода —
+  `render/WaterBurstView.ts` (столб/купол/кольцо, в поле НЕ пишет — следа нет); лёд — полынья.
+  Общий построитель геометрии купола — `render/effects/geometryUtils.ts` (Explosion+WaterBurst).
+- ✅ **Приёмка headless** (`scripts/accept/shots.mjs`, WebGL2 swiftshader): биом-глобус, воронка на
+  суше, слияние двух воронок, водный столб без постоянного следа, круглая полынья на льду, reset
+  очищает поле — консоль без ошибок компиляции шейдеров. Dev-хуки `__strike/__reset/__lookAt`
+  живут в `src/debug/devHooks.ts` за `import.meta.env.DEV` (вырезаются из прод-бандла).
+- ⚠️ Отложено/приближения: wrap splat у антимеридиана не сделан (заявленное приближение);
+  low-res маска 512×256 даёт блочные берега; тон пыли гриба по биому и «пар» водного взрыва —
+  не делали (YAGNI). Материал НЕ влияет на жертвы/геймплей (по решению — только визуал).
 
 ## Что портировано (паритет с `reference/earth-nuke.html`, Task 1–10)
 
