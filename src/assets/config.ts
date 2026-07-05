@@ -19,6 +19,15 @@ export const DAMAGE_TEX_H = 1024;
 // Разрешение вспомогательных equirect-текстур океана (маска берега / волновое поле).
 export const COAST_TEX_W = 1024;
 export const COAST_TEX_H = 512;
+
+// Волновое поле океана (интерактивная рябь/каверна). Разрешение делит COAST для простоты.
+export const WATER_FIELD_W = 1024;
+export const WATER_FIELD_H = 512;
+export const WATER_WAVE_SPEED = 0.25; // c²·dt²/dx² эффективный (стабильно < 0.5 для 4-соседей)
+export const WATER_WAVE_DAMPING = 0.006; // затухание за шаг → поле само возвращается к штилю
+// Импульс удара по воде в поле (по мощности): сила (в скорость) и радиус (доля equirect).
+export const WATER_SPLAT_STRENGTH: Record<number, number> = { 1: 0.6, 10: 1.1, 100: 1.9 };
+export const WATER_SPLAT_RADIUS: Record<number, number> = { 1: 0.012, 10: 0.02, 100: 0.035 };
 export const GLOBE_LON_SEG = 384;
 export const GLOBE_LAT_SEG = 192;
 export const MAX_CRATER_DEPTH = 0.012; // доля радиуса планеты
