@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . && prettier --check .",
-    "gen:landmask": "node scripts/gen-landmask.mjs"
+    "gen:landmask": "node scripts/gen-landmask.mjs",
+    "accept": "node scripts/accept/shots.mjs"
   },
   "dependencies": {
     "miniplex": "2.0.0",

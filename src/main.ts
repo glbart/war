@@ -55,6 +55,14 @@ async function boot() {
   const host = new LocalSimHost(SIM_SEED);
   const hud = new Hud(host);
 
+  // Dev-инструменты headless-приёмки (__strike/__reset/__lookAt на window) — только
+  // в dev-сборке; динамический импорт под import.meta.env.DEV гарантирует, что Vite
+  // вырежет модуль и хуки из прод-бандла (dead-code elimination).
+  if (import.meta.env.DEV) {
+    const { installDevHooks } = await import('./debug/devHooks');
+    installDevHooks(host, globe);
+  }
+
   // Первый пользовательский жест разрешает WebAudio (браузеры не дают запустить
   // AudioContext без него) — как в эталоне (ensureAudio() на pointerdown).
   window.addEventListener('pointerdown', () => ensureAudio(), { once: true });
