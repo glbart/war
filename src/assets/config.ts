@@ -32,6 +32,13 @@ export const GLOBE_LON_SEG = 384;
 export const GLOBE_LAT_SEG = 192;
 export const MAX_CRATER_DEPTH = 0.012; // доля радиуса планеты
 
+// Водная оболочка океана (OceanShell): анимированная сфера чуть выше глобуса.
+export const R_OCEAN = 1.0008; // чуть выше глобуса (r=1) — против z-fighting с ocean-цветом
+export const OCEAN_LON_SEG = 384;
+export const OCEAN_LAT_SEG = 192;
+// Константное направление «солнца» для ручного шейдинга воды (без динамического света).
+export const OCEAN_SUN_DIR: [number, number, number] = [0.55, 0.65, 0.52];
+
 export const YIELDS = [1, 10, 100] as const;
 export type Yield = (typeof YIELDS)[number];
 
