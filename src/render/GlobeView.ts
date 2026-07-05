@@ -176,8 +176,10 @@ export class GlobeView {
     );
     const detailView = transformNormalToView(perturbedLocal);
     // Смешиваем с базовой нормалью (топо-bump): в кратере — по craterMask, на суше на зуме — по
-    // detailK. Вдали и вне кратера blend≈0 → остаётся materialNormal (вид как раньше).
-    const blend = clamp(craterMask.add(detailK), 0, 1);
+    // detailK. Вдали и вне кратера blend≈0 → остаётся materialNormal (вид как раньше). Detail-вклад
+    // кэпим (×0.85), чтобы даже на макс-зуме реальный топо-рельеф континентов частично жил и горы не
+    // сплющивались в изотропный шум; кратер по-прежнему может доходить до 1 (он ДОЛЖЕН перекрывать).
+    const blend = clamp(craterMask.add(detailK.mul(0.85)), 0, 1);
     earthMaterial.normalNode = normalize(mix(materialNormal, detailView, blend));
 
     this.tiltGroup = new THREE.Group();
