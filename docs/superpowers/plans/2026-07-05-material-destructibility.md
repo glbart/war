@@ -95,7 +95,7 @@ public-domain equirect land/sea PNG и паковывает биты; резул
 - Create: `src/sim/landmask.ts`
 - Create: `scripts/gen-landmask.mjs`
 - Test: `test/sim/landmask.test.ts`
-- Modify: `package.json` (скрипт `gen:landmask`, devDep `pngjs`)
+- Modify: `package.json` (скрипт `gen:landmask`, devDep `jpeg-js`)
 
 **Interfaces:**
 - Produces: `LANDMASK_W: number`, `LANDMASK_H: number` (из `landmask.data.ts`)
@@ -165,26 +165,35 @@ export function isLand(lonRad: number, latRad: number): boolean {
 
 - [ ] **Step 4: Генератор `scripts/gen-landmask.mjs`**
 
-Читает локальный equirect land/sea PNG (`scripts/assets/landmask-src.png`), даунсемплит до
-`W×H`, бинаризует по яркости, паковывает в bitset, base64, пишет `src/sim/landmask.data.ts`.
+Источник — **та же Blue Marble, что уже в конфиге** (`EARTH_TEXTURE_URL`): скачиваем один раз
+офлайн-скриптом, классифицируем океан по доминированию синего канала, суша — всё остальное
+(Антарктида/Гренландия — белые, не синие → суша; Сахара — тёплая → суша; океан — насыщенно-синий).
+Даунсемплим до `W×H`, паковываем в bitset, пишем `src/sim/landmask.data.ts`. Рантайм использует
+только запечённую маску — без сети и без Blue Marble в рантайме.
 
 ```js
 // Запуск: npm run gen:landmask
-// Источник scripts/assets/landmask-src.png — public-domain equirect маска суша(белое)/вода(чёрное),
-// например экспортированная из Natural Earth 1:110m. Скачивается вручную один раз.
-import { readFileSync, writeFileSync } from 'node:fs';
-import { PNG } from 'pngjs';
+// Классифицируем океан по доминированию синего на Blue Marble (тот же URL, что в assets/config.ts).
+// jpeg-js — чистый JS-декодер (без нативных зависимостей); fetch глобальный в Node ≥18.
+import { writeFileSync } from 'node:fs';
+import jpeg from 'jpeg-js';
 
+const SRC = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-blue-marble.jpg';
 const W = 512, H = 256;
-const png = PNG.sync.read(readFileSync('scripts/assets/landmask-src.png'));
+
+const buf = new Uint8Array(await (await fetch(SRC)).arrayBuffer());
+const img = jpeg.decode(buf, { useTArray: true }); // { width, height, data: RGBA }
+
 const bitset = new Uint8Array(Math.ceil((W * H) / 8));
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
-    const sx = Math.floor((x / W) * png.width);
-    const sy = Math.floor((y / H) * png.height);
-    const o = (sy * png.width + sx) * 4;
-    const lum = (png.data[o] + png.data[o + 1] + png.data[o + 2]) / 3;
-    if (lum > 110) {
+    const sx = Math.floor((x / W) * img.width);
+    const sy = Math.floor((y / H) * img.height);
+    const o = (sy * img.width + sx) * 4;
+    const r = img.data[o], g = img.data[o + 1], b = img.data[o + 2];
+    // Океан: синий заметно доминирует и пиксель не яркий (не лёд/облако/снег).
+    const isOcean = b > r + 12 && b > g + 6 && b > 40 && r < 120;
+    if (!isOcean) {
       const idx = y * W + x;
       bitset[idx >> 3] |= 1 << (idx & 7);
     }
@@ -197,23 +206,24 @@ writeFileSync(
     `export const LANDMASK_W = ${W};\nexport const LANDMASK_H = ${H};\n` +
     `export const LANDMASK_BITS_B64 = '${b64}';\n`,
 );
-console.log('landmask.data.ts записан');
+console.log('landmask.data.ts записан:', bitset.length, 'байт');
 ```
 
 Добавить в `package.json` scripts: `"gen:landmask": "node scripts/gen-landmask.mjs"`, и
-`pngjs` в devDependencies (`npm i -D pngjs`).
+`jpeg-js` в devDependencies (`npm i -D jpeg-js`).
 
 - [ ] **Step 5: Сгенерировать данные**
 
-Скачать public-domain equirect маску суша/вода в `scripts/assets/landmask-src.png` (белое —
-суша, чёрное — вода; при инверсии поменять порог), затем:
-
 Run: `npm run gen:landmask`
-Expected: создан `src/sim/landmask.data.ts` с непустым `LANDMASK_BITS_B64`.
+Expected: создан `src/sim/landmask.data.ts` с непустым `LANDMASK_BITS_B64` (~16 КБ base64).
 
-> **Фолбэк офлайн (если PNG недоступен):** временно сгенерировать `landmask.data.ts` вручную из
-> процедурной заглушки (грубые эллипсы материков) — материки настоящие лишь примерно, но тесты
-> Step 1 должны пройти; заменить на растровую маску позже. Не оставлять пустой bitset.
+> **Тюнинг порога:** если репер-тесты Step 1 не сходятся (например, крупное озеро/лёд ушли в воду
+> или прибрежье — в сушу), подстроить коэффициенты `isOcean` и перегенерировать. Это ожидаемая
+> калибровка, а не блокер.
+>
+> **Фолбэк офлайн (если `fetch` недоступен):** сгенерировать `landmask.data.ts` из грубой
+> процедурной заглушки (эллипсы крупных материков) так, чтобы 4 репер-теста Step 1 прошли; заменить
+> на Blue Marble-маску позже. Не оставлять пустой bitset.
 
 - [ ] **Step 6: Запустить — проходит**
 
