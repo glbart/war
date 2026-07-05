@@ -99,12 +99,17 @@ export class WaterField {
     this.rtA = makeRT();
     this.rtB = makeRT();
     this.stableRt = makeRT();
-    // Штиль до первого step() — иначе первый кадр OceanShell прочитал бы неинициализированный мусор
-    // (важно и в !supported: step() = no-op, но stableRt валиден и содержит нули).
+    // Обнуляем ВСЕ три RT на старте. Критично для sim-RT (rtA/rtB): на WebGL2 нет гарантии
+    // нуль-инициализации текстур — иначе первый step() прочитал бы мусор/NaN в лапласиане,
+    // clamp(-4,4) NaN не санирует (сравнения с NaN = false), и порча пошла бы по ping-pong,
+    // блитясь в stableRt каждый кадр → перманентно ломая «возврат к штилю». stableRt — чтобы
+    // первый кадр OceanShell (до первого step, и в !supported-режиме) читал штиль, а не мусор.
     {
       const prevTarget = ctx.renderer.getRenderTarget();
-      ctx.renderer.setRenderTarget(this.stableRt);
-      ctx.renderer.clearColor();
+      for (const rt of [this.rtA, this.rtB, this.stableRt]) {
+        ctx.renderer.setRenderTarget(rt);
+        ctx.renderer.clearColor();
+      }
       ctx.renderer.setRenderTarget(prevTarget);
     }
 
