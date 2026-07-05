@@ -3,13 +3,13 @@
 // (WebGPU-бэкенд three 0.185 компилирует их и в WGSL, и в GLSL-фолбэк).
 import type * as THREE from 'three/webgpu';
 import {
-  Fn,
   positionWorld,
   cameraPosition,
   normalWorld,
   dot,
   cross,
   sub,
+  length,
   normalize,
   pow,
   oneMinus,
@@ -17,8 +17,6 @@ import {
   vec3,
   vec4,
   float,
-  floor,
-  fract,
   clamp,
   mix,
   smoothstep,
@@ -41,77 +39,47 @@ import {
   CRATER_MATERIAL_COLORS,
   CRATER_DETAIL_OCTAVES,
   CRATER_DETAIL_STRENGTH,
+  DETAIL_NEAR,
+  DETAIL_FAR,
+  DETAIL_ALBEDO_AMP,
+  DETAIL_NORMAL_STR,
+  DETAIL_FREQ,
+  DETAIL_OCTAVES,
 } from '../assets/config';
 import { buildBiomeCanvas } from './MaterialGlobe';
+import { fbm3 } from './noise';
 
 const ATMOSPHERE_RADIUS = 1.06;
 const ATMOSPHERE_FRESNEL_POWER = 4.5;
 const ATMOSPHERE_INTENSITY = 0.55;
 
 // Микрорельеф кратера: масштаб шума по сфере, шаг конечных разностей для нормали и сила рельефа.
-const DETAIL_FREQ = 46.0; // частота fbm по positionLocal (мелкая шероховатость вала/стенок)
-const DETAIL_EPS = 0.0018; // шаг конечных разностей в касательной плоскости
-const DETAIL_RELIEF = 0.5; // масштаб наклона нормали от градиента высоты
+const CRATER_DETAIL_FREQ = 46.0; // частота fbm по сфере (мелкая шероховатость вала/стенок)
+const CRATER_DETAIL_EPS = 0.0018; // шаг конечных разностей в касательной плоскости
+const CRATER_DETAIL_RELIEF = 0.5; // масштаб наклона нормали от градиента высоты
 
-// Узловые типы для аргументов TSL-функций (Fn), как в OceanShell: тянем Node<"float">/Node<"vec3">
-// из сигнатур dot/cross, чтобы не импортировать внутренний путь three к типу Node.
-type FloatNode = ReturnType<typeof dot>;
+// Узловой тип для аргумента TSL-функции (Fn), как в OceanShell: тянем Node<"vec3"> из сигнатуры
+// cross, чтобы не импортировать внутренний путь three к типу Node.
 type Vec3Node = ReturnType<typeof cross>;
 
-// ---------- шум (порт hash/noise/fbm из OceanShell на TSL Fn) ----------
-// value-noise на решётке хешей; fbm — CRATER_DETAIL_OCTAVES октав (микрорельеф кратера).
-const hash = Fn(([p]: [Vec3Node]) => {
-  const q = fract(p.mul(0.3183099).add(0.1)).mul(17.0);
-  return fract(q.x.mul(q.y).mul(q.z).mul(q.x.add(q.y).add(q.z)));
-});
-
-const noise = Fn(([x]: [Vec3Node]) => {
-  const i = floor(x);
-  const f0 = fract(x);
-  const f = f0.mul(f0).mul(float(3).sub(f0.mul(2))); // сглаживание f*f*(3-2f)
-  const c000 = hash(i.add(vec3(0, 0, 0)));
-  const c100 = hash(i.add(vec3(1, 0, 0)));
-  const c010 = hash(i.add(vec3(0, 1, 0)));
-  const c110 = hash(i.add(vec3(1, 1, 0)));
-  const c001 = hash(i.add(vec3(0, 0, 1)));
-  const c101 = hash(i.add(vec3(1, 0, 1)));
-  const c011 = hash(i.add(vec3(0, 1, 1)));
-  const c111 = hash(i.add(vec3(1, 1, 1)));
-  return mix(
-    mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
-    mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y),
-    f.z,
-  );
-});
-
-const fbm = Fn(([p]: [Vec3Node]) => {
-  let s: FloatNode = float(0);
-  let pp: Vec3Node = p;
-  let a = 0.5;
-  for (let k = 0; k < CRATER_DETAIL_OCTAVES; k++) {
-    s = s.add(noise(pp).mul(a));
-    pp = pp.mul(2.02);
-    a *= 0.5;
-  }
-  return s;
-});
-
-// Возмущённая нормаль микрорельефа: градиент высоты fbm в касательной плоскости к n (конечные
-// разности, как OceanShell.waterNormal). n — единичная локальная нормаль (≈ точка на сфере r=1).
-const craterDetailNormal = Fn(([n]: [Vec3Node]) => {
+// Градиент высоты fbm в касательной плоскости к n (конечные разности, как OceanShell.waterNormal).
+// Общий приём для микрорельефа кратера и detail-слоя суши — различаются лишь частотой/октавами/силой.
+// Возвращает ВЕКТОР смещения нормали в локальном пространстве (n.sub(grad) даёт возмущённую нормаль);
+// это позволяет сложить возмущения кратера и детали ДО перевода в view. n — единичная локальная
+// нормаль (≈ точка на сфере r=1). freq/octaves/relief — константы времени построения графа.
+function heightGrad(n: Vec3Node, freq: number, octaves: number, relief: number): Vec3Node {
   // касательный базис у n; у полюса (|n.y|≈1) берём иную опорную ось, чтобы cross не выродился
   const upRef = select(lessThan(abs(n.y), float(0.99)), vec3(0, 1, 0), vec3(1, 0, 0));
   const t1 = normalize(cross(upRef, n));
   const t2 = cross(n, t1);
-  const h0 = fbm(n.mul(DETAIL_FREQ));
-  const hx = fbm(normalize(n.add(t1.mul(DETAIL_EPS))).mul(DETAIL_FREQ));
-  const hy = fbm(normalize(n.add(t2.mul(DETAIL_EPS))).mul(DETAIL_FREQ));
-  const grad = t1
+  const h0 = fbm3(n.mul(freq), octaves);
+  const hx = fbm3(normalize(n.add(t1.mul(CRATER_DETAIL_EPS))).mul(freq), octaves);
+  const hy = fbm3(normalize(n.add(t2.mul(CRATER_DETAIL_EPS))).mul(freq), octaves);
+  return t1
     .mul(hx.sub(h0))
     .add(t2.mul(hy.sub(h0)))
-    .mul(DETAIL_RELIEF / DETAIL_EPS);
-  return normalize(n.sub(grad));
-});
+    .mul(relief / CRATER_DETAIL_EPS);
+}
 
 export class GlobeView {
   readonly earthMesh: THREE.Mesh;
@@ -135,6 +103,11 @@ export class GlobeView {
     // полынья (лёд), A=вал+эжекта (вверх, кольцо снаружи чаши). Захват — один раз.
     const dmg = texture(damageTex, uv());
     const depth = dmg.r;
+
+    // Сила процедурной детализации суши по дистанции камеры до фрагмента: вблизи 1, вдали 0.
+    // Форма совпадает с чистой detailStrength(dist, NEAR, FAR) — smoothstep(FAR, NEAR, dist).
+    const camDist = length(sub(cameraPosition, positionWorld));
+    const detailK = smoothstep(float(DETAIL_FAR), float(DETAIL_NEAR), camDist);
     // Деформация: дно чаши вдавлено вдоль нормали на R·MAX_CRATER_DEPTH, вал/эжекта приподняты на
     // A·CRATER_RIM_HEIGHT. Обязательно локальные position/normal — сфера в объектных координатах.
     const rimUp = dmg.a.mul(float(CRATER_RIM_HEIGHT));
@@ -146,9 +119,15 @@ export class GlobeView {
     // гари). База — биом; поверх — послойные mix'ы по каналам поля урона.
     const cm = CRATER_MATERIAL_COLORS;
     const base = texture(biomeTex, uv()).rgb;
+    // Detail-albedo: мелкая светлотная вариация вокруг биом-цвета (высокочастотный fbm по
+    // positionLocal), гаснущая вдали через detailK. Применяется ДО кратер-зон — кратер строится
+    // ОТ baseDetailed и доминирует ПОВЕРХ детали, а не зашумляется ею.
+    const detN = fbm3(positionLocal.mul(float(DETAIL_FREQ)), DETAIL_OCTAVES); // 0..1
+    const detVar = detN.sub(0.5).mul(float(DETAIL_ALBEDO_AMP)).mul(detailK);
+    const baseDetailed = base.mul(float(1).add(detVar));
     // 1) широкая гарь — мягкое потемнение биома ГРАДИЕНТОМ по каналу G (не слэб near-black):
     const scorched = mix(
-      base,
+      baseDetailed,
       vec3(cm.scorch[0], cm.scorch[1], cm.scorch[2]),
       clamp(dmg.g.mul(0.8), 0, 1),
     );
@@ -175,16 +154,33 @@ export class GlobeView {
     const molten = mix(withIceRim, vec3(0.05, 0.12, 0.2), openWater);
     earthMaterial.colorNode = molten;
 
-    // Микрорельеф нормали в damaged-зоне: возмущение геонормали процедурным fbm по positionLocal,
-    // сила ∝ (R+A) — вал/стенки ловят статичный свет сцены (динсвета нет). Базовая нормаль
-    // materialNormal сохраняет топо-bump вне кратера (маска≈0), внутри — подмешивается деталь.
-    const detailView = transformNormalToView(craterDetailNormal(normalLocal));
-    const detailMask = clamp(
+    // Микрорельеф нормали. Складываем ДВА локальных возмущения нормали ДО перевода в view:
+    //  • кратер — fbm по CRATER_DETAIL_FREQ, гейтится craterMask (R+A) → только в damaged-зоне;
+    //  • деталь суши — fbm по DETAIL_FREQ, гейтится detailK → появляется на зуме на ВСЕЙ суше.
+    // Деталь ДОБАВЛЯЕТСЯ к кратеру, не заменяет его. Вдали (detailK=0) detailGrad=0 → как в 2A.
+    const craterMask = clamp(
       clamp(dmg.r.add(dmg.a), 0, 1).mul(float(CRATER_DETAIL_STRENGTH)),
       0,
       1,
     );
-    earthMaterial.normalNode = normalize(mix(materialNormal, detailView, detailMask));
+    const craterGrad = heightGrad(
+      normalLocal,
+      CRATER_DETAIL_FREQ,
+      CRATER_DETAIL_OCTAVES,
+      CRATER_DETAIL_RELIEF,
+    );
+    const detailGrad = heightGrad(normalLocal, DETAIL_FREQ, DETAIL_OCTAVES, DETAIL_NORMAL_STR);
+    // кратер-градиент гейтим маской, detail-градиент — дистанцией; сумма → возмущённая локнормаль
+    const perturbedLocal = normalize(
+      normalLocal.sub(craterGrad.mul(craterMask).add(detailGrad.mul(detailK))),
+    );
+    const detailView = transformNormalToView(perturbedLocal);
+    // Смешиваем с базовой нормалью (топо-bump): в кратере — по craterMask, на суше на зуме — по
+    // detailK. Вдали и вне кратера blend≈0 → остаётся materialNormal (вид как раньше). Detail-вклад
+    // кэпим (×0.85), чтобы даже на макс-зуме реальный топо-рельеф континентов частично жил и горы не
+    // сплющивались в изотропный шум; кратер по-прежнему может доходить до 1 (он ДОЛЖЕН перекрывать).
+    const blend = clamp(craterMask.add(detailK.mul(0.85)), 0, 1);
+    earthMaterial.normalNode = normalize(mix(materialNormal, detailView, blend));
 
     this.tiltGroup = new THREE.Group();
     this.spinGroup = new THREE.Group();
