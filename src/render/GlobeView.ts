@@ -16,73 +16,12 @@ import {
   float,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
-import { TEX_W, TEX_H, EARTH_TEXTURE_URL, EARTH_TOPO_URL } from '../assets/config';
+import { EARTH_TOPO_URL } from '../assets/config';
+import { buildBiomeCanvas } from './MaterialGlobe';
 
-const EARTH_LOAD_TIMEOUT_MS = 15000;
 const ATMOSPHERE_RADIUS = 1.06;
 const ATMOSPHERE_FRESNEL_POWER = 4.5;
 const ATMOSPHERE_INTENSITY = 0.55;
-
-// Процедурный фолбэк текстуры Земли (порт drawProceduralEarth(), строки ~144-167 эталона).
-// Эталон использует собственный seeded LCG (не Math.random) ради стабильной картинки
-// фолбэка между запусками — сохраняем эту деталь один в один.
-function drawProceduralEarth(ctx: CanvasRenderingContext2D): void {
-  const g = ctx.createLinearGradient(0, 0, 0, TEX_H);
-  g.addColorStop(0, '#0a2a52');
-  g.addColorStop(0.5, '#0e3a6e');
-  g.addColorStop(1, '#0a2a52');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, TEX_W, TEX_H);
-
-  let seed = 1337;
-  const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  ctx.globalAlpha = 0.9;
-  for (let c = 0; c < 14; c++) {
-    const cx = rnd() * TEX_W;
-    const cy = TEX_H * (0.18 + rnd() * 0.64);
-    const hue = 80 + rnd() * 40;
-    const size = 60 + rnd() * 140;
-    for (let b = 0; b < 40; b++) {
-      const a = rnd() * Math.PI * 2;
-      const d = rnd() * size;
-      ctx.fillStyle = `hsl(${hue + rnd() * 20}, ${35 + rnd() * 20}%, ${28 + rnd() * 14}%)`;
-      ctx.beginPath();
-      ctx.ellipse(
-        (cx + Math.cos(a) * d * 1.6 + TEX_W) % TEX_W,
-        cy + Math.sin(a) * d,
-        20 + rnd() * 50,
-        14 + rnd() * 34,
-        rnd() * Math.PI,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-    }
-  }
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = '#e8f0f6';
-  ctx.fillRect(0, 0, TEX_W, TEX_H * 0.05);
-  ctx.fillRect(0, TEX_H * 0.95, TEX_W, TEX_H * 0.05);
-}
-
-// Грузит картинку Blue Marble; резолвится в null при ошибке или по таймауту 15с
-// (порт loadEarthTexture(), строки ~170-179 эталона) — тогда включаем процедурный фолбэк.
-function loadEarthImage(): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    const fallback = setTimeout(() => resolve(null), EARTH_LOAD_TIMEOUT_MS);
-    img.onload = () => {
-      clearTimeout(fallback);
-      resolve(img);
-    };
-    img.onerror = () => {
-      clearTimeout(fallback);
-      resolve(null);
-    };
-    img.src = EARTH_TEXTURE_URL;
-  });
-}
 
 export class GlobeView {
   readonly earthMesh: THREE.Mesh;
@@ -128,25 +67,14 @@ export class GlobeView {
     return new THREE.Mesh(new THREE.SphereGeometry(ATMOSPHERE_RADIUS, 64, 48), atmoMaterial);
   }
 
-  // Грузит текстуру Земли в canvas (Blue Marble либо процедурный фолбэк), заворачивает
-  // в CanvasTexture и подставляет в материал; отдельно (не блокируя готовность) грузит
-  // карту рельефа (bump) — порт строк ~181-201 эталона.
+  // Строит стилизованную биом-текстуру (вместо фотоснимка), заворачивает в CanvasTexture
+  // и подставляет в материал; отдельно (не блокируя готовность) грузит карту рельефа (bump).
   private async loadTexture(
     ctx: ThreeCtx,
     earthMaterial: THREE.MeshPhongNodeMaterial,
   ): Promise<void> {
     const { THREE } = ctx;
-    const img = await loadEarthImage();
-
-    const canvas = document.createElement('canvas');
-    canvas.width = TEX_W;
-    canvas.height = TEX_H;
-    const canvasCtx = canvas.getContext('2d');
-    if (canvasCtx) {
-      if (img) canvasCtx.drawImage(img, 0, 0, TEX_W, TEX_H);
-      else drawProceduralEarth(canvasCtx);
-    }
-
+    const canvas = buildBiomeCanvas();
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = ctx.renderer.getMaxAnisotropy();
@@ -160,7 +88,7 @@ export class GlobeView {
     });
   }
 
-  // Резолвится, когда текстура Земли (или процедурный фолбэк) готова и подставлена в материал.
+  // Резолвится, когда биом-текстура готова и подставлена в материал.
   whenReady(): Promise<void> {
     return this.readyPromise;
   }
