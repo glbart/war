@@ -16,6 +16,9 @@ export const BIOME_TEX_W = 1024;
 export const BIOME_TEX_H = 512;
 export const DAMAGE_TEX_W = 2048;
 export const DAMAGE_TEX_H = 1024;
+// Разрешение вспомогательных equirect-текстур океана (маска берега / волновое поле).
+export const COAST_TEX_W = 1024;
+export const COAST_TEX_H = 512;
 export const GLOBE_LON_SEG = 384;
 export const GLOBE_LAT_SEG = 192;
 export const MAX_CRATER_DEPTH = 0.012; // доля радиуса планеты
