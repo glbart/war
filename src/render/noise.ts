@@ -35,7 +35,13 @@ export const noise3 = Fn(([x]: [Vec3Node]) => {
   );
 });
 
-export const fbm3 = Fn(([p, octaves]: [Vec3Node, number]) => {
+// ВАЖНО: fbm3 — ОБЫЧНАЯ JS-функция, НЕ Fn. Если обернуть в Fn, three прогонит аргументы через
+// nodeObjects() и превратит `octaves` в ConstNode; тогда `k < <Node>` → NaN → цикл не выполнится
+// ни разу и fbm3 всегда вернёт float(0) (шум пропадает — вода, кратер, detail-слой). Оставляя её
+// обычной функцией, `octaves` остаётся JS-числом и цикл разворачивается при построении графа
+// (ровно как heightGrad/craterDetailNormal — обычные функции над TSL-узлами).
+// Первая октава домножается на a = 0.5 (как в исходных fbm), шаг решётки 2.02, затухание a *= 0.5.
+export function fbm3(p: Vec3Node, octaves: number): FloatNode {
   let s: FloatNode = float(0);
   let pp: Vec3Node = p;
   let a = 0.5;
@@ -45,4 +51,4 @@ export const fbm3 = Fn(([p, octaves]: [Vec3Node, number]) => {
     a *= 0.5;
   }
   return s;
-});
+}
