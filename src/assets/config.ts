@@ -16,9 +16,28 @@ export const BIOME_TEX_W = 1024;
 export const BIOME_TEX_H = 512;
 export const DAMAGE_TEX_W = 2048;
 export const DAMAGE_TEX_H = 1024;
+// Разрешение вспомогательных equirect-текстур океана (маска берега / волновое поле).
+export const COAST_TEX_W = 1024;
+export const COAST_TEX_H = 512;
+
+// Волновое поле океана (интерактивная рябь/каверна). Разрешение делит COAST для простоты.
+export const WATER_FIELD_W = 1024;
+export const WATER_FIELD_H = 512;
+export const WATER_WAVE_SPEED = 0.25; // c²·dt²/dx² эффективный (стабильно < 0.5 для 4-соседей)
+export const WATER_WAVE_DAMPING = 0.006; // затухание за шаг → поле само возвращается к штилю
+// Импульс удара по воде в поле (по мощности): сила (в скорость) и радиус (доля equirect).
+export const WATER_SPLAT_STRENGTH: Record<number, number> = { 1: 0.6, 10: 1.1, 100: 1.9 };
+export const WATER_SPLAT_RADIUS: Record<number, number> = { 1: 0.012, 10: 0.02, 100: 0.035 };
 export const GLOBE_LON_SEG = 384;
 export const GLOBE_LAT_SEG = 192;
 export const MAX_CRATER_DEPTH = 0.012; // доля радиуса планеты
+
+// Водная оболочка океана (OceanShell): анимированная сфера чуть выше глобуса.
+export const R_OCEAN = 1.0008; // чуть выше глобуса (r=1) — против z-fighting с ocean-цветом
+export const OCEAN_LON_SEG = 384;
+export const OCEAN_LAT_SEG = 192;
+// Константное направление «солнца» для ручного шейдинга воды (без динамического света).
+export const OCEAN_SUN_DIR: [number, number, number] = [0.55, 0.65, 0.52];
 
 export const YIELDS = [1, 10, 100] as const;
 export type Yield = (typeof YIELDS)[number];

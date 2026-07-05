@@ -15,7 +15,11 @@ import { WaterBurstView } from './WaterBurstView';
 import { ParticlePool } from './effects/particles';
 import { DecalView } from './DecalView';
 import type { DamageField } from './DamageField';
+import { WaterField } from './WaterField';
+import { OceanShell } from './OceanShell';
+import { buildCoastTexture } from './CoastField';
 import { playBoom } from './effects/sound';
+import { WATER_SPLAT_STRENGTH, WATER_SPLAT_RADIUS } from '../assets/config';
 
 // Порт shake = Math.max(shake, 0.02 * ys), ys = {1:0.6, 10:1.0, 100:1.7}[yieldMt]
 // (reference/earth-nuke.html ~755) — чем мощнее заряд, тем сильнее толчок камеры.
@@ -28,6 +32,8 @@ export class Scene {
   private readonly waterBurstView: WaterBurstView;
   private readonly particlePool: ParticlePool;
   private readonly decalView: DecalView;
+  private readonly waterField: WaterField;
+  private readonly oceanShell: OceanShell;
   private clock = 0; // общие часы рендера (секунды); база спавна частиц и uTime шейдера
 
   // ctx/globe/host не сохраняются полями — используются только здесь, при постройке владений
@@ -46,6 +52,10 @@ export class Scene {
     this.waterBurstView = new WaterBurstView(ctx, globe.spinGroup);
     this.particlePool = new ParticlePool(ctx, globe.spinGroup);
     this.decalView = new DecalView(ctx, globe);
+    // Интерактивная вода: поле волн + маска берега + анимированная оболочка над глобусом.
+    this.waterField = new WaterField(ctx);
+    const coastTex = buildCoastTexture(ctx);
+    this.oceanShell = new OceanShell(ctx, globe.spinGroup, this.waterField.texture, coastTex);
   }
 
   // Разбирает события, уже слитые из host.drainEvents() вызывающим кодом (main.ts) —
@@ -67,6 +77,7 @@ export class Scene {
       case 'planetReset':
         this.decalView.clear();
         this.damageField.clear();
+        this.waterField.clear();
         break;
       default:
         break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
@@ -82,6 +93,12 @@ export class Scene {
     this.triggerShake(yieldMt);
     if (surface === 'water') {
       this.waterBurstView.spawn(dir, yieldMt, seed);
+      // Интерактивное поле: импульс каверны/ряби (сила/радиус по мощности).
+      this.waterField.splat(
+        dir,
+        WATER_SPLAT_STRENGTH[yieldMt] ?? 1,
+        WATER_SPLAT_RADIUS[yieldMt] ?? 0.02,
+      );
     } else {
       void biome; // тон пыли по биому — отложено (Task 10): particlePool.emit его не принимает
       this.explosionView.spawn(dir, yieldMt, seed);
@@ -100,6 +117,8 @@ export class Scene {
   // Двигает вьюхи на dt секунд реального времени (вызывается из render-колбэка GameLoop).
   update(dt: number): void {
     this.clock += dt;
+    this.waterField.step(dt);
+    this.oceanShell.setTime(this.clock);
     this.missileView.update(dt);
     this.explosionView.update(dt);
     this.waterBurstView.update(dt);
