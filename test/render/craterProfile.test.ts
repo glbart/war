@@ -15,6 +15,12 @@ describe('craterProfile', () => {
     expect(Math.max(...around)).toBeGreaterThan(0.5);
   });
 
+  it('эжекта: нулевая внутри чаши (кольцо снаружи, не диск)', () => {
+    expect(craterProfile(0).ejecta).toBeLessThan(0.05);
+    expect(craterProfile(0.5).ejecta).toBeLessThan(0.05);
+    expect(craterProfile(1.0).ejecta).toBeLessThan(0.15);
+  });
+
   it('эжекта: спадает к периферии', () => {
     const near = craterProfile(1.3).ejecta;
     const far = craterProfile(2.5).ejecta;

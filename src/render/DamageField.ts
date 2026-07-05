@@ -101,9 +101,13 @@ export class DamageField {
     // 0 в центре, 1 на краю чаши, >1 снаружи (вал/эжекта). Формулы ниже — его TSL-зеркало.
     const dNorm = d.div(this.uRadius);
     const depth = smoothstep(float(1), float(0), dNorm); // чаша: 1 в центре → 0 на краю
-    const rimX = dNorm.sub(CRATER_RIM_FRAC).div(CRATER_RIM_WIDTH_FRAC);
+    const rimX = dNorm.sub(float(CRATER_RIM_FRAC)).div(float(CRATER_RIM_WIDTH_FRAC));
     const rim = exp(rimX.mul(rimX).negate()); // вал: гаусс за краем чаши
-    const ejecta = smoothstep(float(CRATER_EJECTA_FRAC), float(CRATER_RIM_FRAC), dNorm);
+    // Эжекта: кольцо СНАРУЖИ чаши — спад от вала наружу, домноженный на внутренний ramp,
+    // обнуляющий её ниже вала (внутри чаши эжекты нет). Форма зеркалит craterProfile.ts.
+    const ejecta = smoothstep(float(CRATER_EJECTA_FRAC), float(CRATER_RIM_FRAC), dNorm).mul(
+      smoothstep(float(1), float(CRATER_RIM_FRAC), dNorm),
+    );
     const scorch = smoothstep(float(CRATER_SCORCH_FRAC), float(0), dNorm); // широкая гарь
     const melt = clamp(depth.mul(this.uKind), 0, 1); // только лёд, форма как у чаши
     const stamp = vec4(

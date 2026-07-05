@@ -23,8 +23,10 @@ export function craterProfile(dNorm: number): {
   // Вал: гаусс с центром CRATER_RIM_FRAC, шириной CRATER_RIM_WIDTH_FRAC.
   const rimX = (dNorm - CRATER_RIM_FRAC) / CRATER_RIM_WIDTH_FRAC;
   const rim = Math.exp(-rimX * rimX);
-  // Эжекта: от вала спадает к CRATER_EJECTA_FRAC.
-  const ejecta = smoothstep(CRATER_EJECTA_FRAC, CRATER_RIM_FRAC, dNorm);
+  // Эжекта: кольцо СНАРУЖИ чаши. Первый smoothstep — спад от вала к CRATER_EJECTA_FRAC,
+  // второй (внутренний ramp) — обнуляет её ниже вала (внутри чаши эжекты нет, это не диск).
+  const ejecta =
+    smoothstep(CRATER_EJECTA_FRAC, CRATER_RIM_FRAC, dNorm) * smoothstep(1, CRATER_RIM_FRAC, dNorm);
   // Гарь: широкий мягкий градиент до CRATER_SCORCH_FRAC.
   const scorch = smoothstep(CRATER_SCORCH_FRAC, 0, dNorm);
   return { depth, rim, ejecta, scorch };
