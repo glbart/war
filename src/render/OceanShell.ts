@@ -21,8 +21,6 @@ import {
   vec4,
   float,
   sin,
-  floor,
-  fract,
   dot,
   cross,
   normalize,
@@ -48,6 +46,7 @@ import {
   OCEAN_LAT_SEG,
   MAX_CRATER_DEPTH,
 } from '../assets/config';
+import { fbm3 } from './noise';
 
 // Точный тип float-юниформа (как в WaterBurstView/particles): .value остаётся number.
 function makeFloatUniform(v: number) {
@@ -68,44 +67,6 @@ const NORMAL_E = 0.0016; // шаг конечных разностей для н
 const NORMAL_SC = 0.02; // сила рельефа нормали волн
 const FIELD_EPS = 0.003; // шаг конечных разностей по uv поля (отклик удара)
 const FIELD_NORMAL = 8.0; // сила наклона нормали от градиента поля (каверна/рябь)
-
-// ---------- шум (порт hash/noise/fbm из мокапа на TSL) ----------
-// value-noise на основе хеша от целочисленной решётки; fbm — 5 октав.
-const hash = Fn(([p]: [Vec3Node]) => {
-  const q = fract(p.mul(0.3183099).add(0.1)).mul(17.0);
-  return fract(q.x.mul(q.y).mul(q.z).mul(q.x.add(q.y).add(q.z)));
-});
-
-const noise = Fn(([x]: [Vec3Node]) => {
-  const i = floor(x);
-  const f0 = fract(x);
-  const f = f0.mul(f0).mul(float(3).sub(f0.mul(2))); // сглаживание f*f*(3-2f)
-  const c000 = hash(i.add(vec3(0, 0, 0)));
-  const c100 = hash(i.add(vec3(1, 0, 0)));
-  const c010 = hash(i.add(vec3(0, 1, 0)));
-  const c110 = hash(i.add(vec3(1, 1, 0)));
-  const c001 = hash(i.add(vec3(0, 0, 1)));
-  const c101 = hash(i.add(vec3(1, 0, 1)));
-  const c011 = hash(i.add(vec3(0, 1, 1)));
-  const c111 = hash(i.add(vec3(1, 1, 1)));
-  return mix(
-    mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
-    mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y),
-    f.z,
-  );
-});
-
-const fbm = Fn(([p]: [Vec3Node]) => {
-  let s: FloatNode = float(0);
-  let pp: Vec3Node = p;
-  let a = 0.5;
-  for (let k = 0; k < 5; k++) {
-    s = s.add(noise(pp).mul(a));
-    pp = pp.mul(2.02);
-    a *= 0.5;
-  }
-  return s;
-});
 
 // ---------- волнение (порт ambient/waterNormal из мокапа) ----------
 // Высота волн в точке направления d (единичный вектор) в момент t: три направленных свелла +
@@ -131,7 +92,7 @@ const ambient = Fn(([d, t]: [Vec3Node, FloatNode]) => {
     ).mul(0.22),
   );
   h = h.add(
-    fbm(d.mul(70.0 * WAVE_W).add(vec3(0.0, 0.0, t.mul(0.6))))
+    fbm3(d.mul(70.0 * WAVE_W).add(vec3(0.0, 0.0, t.mul(0.6))), 5)
       .sub(0.5)
       .mul(1.1),
   );
@@ -242,7 +203,7 @@ export class OceanShell {
 
     // Пена: гребни постоянных волн (hAmb посчитан выше) + береговая полоса + гребни удара.
     const crest = smoothstep(0.35, 0.9, hAmb).mul(FOAM);
-    const shoreNoise = fbm(nLocal.mul(90.0).add(vec3(0.0, 0.0, t.mul(0.4))));
+    const shoreNoise = fbm3(nLocal.mul(90.0).add(vec3(0.0, 0.0, t.mul(0.4))), 5);
     const shoreFoam = oneMinus(coast)
       .mul(smoothstep(0.2, 0.6, shoreNoise))
       .mul(FOAM * 0.8);

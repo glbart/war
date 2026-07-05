@@ -17,8 +17,6 @@ import {
   vec3,
   vec4,
   float,
-  floor,
-  fract,
   clamp,
   mix,
   smoothstep,
@@ -43,6 +41,7 @@ import {
   CRATER_DETAIL_STRENGTH,
 } from '../assets/config';
 import { buildBiomeCanvas } from './MaterialGlobe';
+import { fbm3 } from './noise';
 
 const ATMOSPHERE_RADIUS = 1.06;
 const ATMOSPHERE_FRESNEL_POWER = 4.5;
@@ -53,48 +52,9 @@ const DETAIL_FREQ = 46.0; // частота fbm по positionLocal (мелкая
 const DETAIL_EPS = 0.0018; // шаг конечных разностей в касательной плоскости
 const DETAIL_RELIEF = 0.5; // масштаб наклона нормали от градиента высоты
 
-// Узловые типы для аргументов TSL-функций (Fn), как в OceanShell: тянем Node<"float">/Node<"vec3">
-// из сигнатур dot/cross, чтобы не импортировать внутренний путь three к типу Node.
-type FloatNode = ReturnType<typeof dot>;
+// Узловой тип для аргумента TSL-функции (Fn), как в OceanShell: тянем Node<"vec3"> из сигнатуры
+// cross, чтобы не импортировать внутренний путь three к типу Node.
 type Vec3Node = ReturnType<typeof cross>;
-
-// ---------- шум (порт hash/noise/fbm из OceanShell на TSL Fn) ----------
-// value-noise на решётке хешей; fbm — CRATER_DETAIL_OCTAVES октав (микрорельеф кратера).
-const hash = Fn(([p]: [Vec3Node]) => {
-  const q = fract(p.mul(0.3183099).add(0.1)).mul(17.0);
-  return fract(q.x.mul(q.y).mul(q.z).mul(q.x.add(q.y).add(q.z)));
-});
-
-const noise = Fn(([x]: [Vec3Node]) => {
-  const i = floor(x);
-  const f0 = fract(x);
-  const f = f0.mul(f0).mul(float(3).sub(f0.mul(2))); // сглаживание f*f*(3-2f)
-  const c000 = hash(i.add(vec3(0, 0, 0)));
-  const c100 = hash(i.add(vec3(1, 0, 0)));
-  const c010 = hash(i.add(vec3(0, 1, 0)));
-  const c110 = hash(i.add(vec3(1, 1, 0)));
-  const c001 = hash(i.add(vec3(0, 0, 1)));
-  const c101 = hash(i.add(vec3(1, 0, 1)));
-  const c011 = hash(i.add(vec3(0, 1, 1)));
-  const c111 = hash(i.add(vec3(1, 1, 1)));
-  return mix(
-    mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
-    mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y),
-    f.z,
-  );
-});
-
-const fbm = Fn(([p]: [Vec3Node]) => {
-  let s: FloatNode = float(0);
-  let pp: Vec3Node = p;
-  let a = 0.5;
-  for (let k = 0; k < CRATER_DETAIL_OCTAVES; k++) {
-    s = s.add(noise(pp).mul(a));
-    pp = pp.mul(2.02);
-    a *= 0.5;
-  }
-  return s;
-});
 
 // Возмущённая нормаль микрорельефа: градиент высоты fbm в касательной плоскости к n (конечные
 // разности, как OceanShell.waterNormal). n — единичная локальная нормаль (≈ точка на сфере r=1).
@@ -103,9 +63,9 @@ const craterDetailNormal = Fn(([n]: [Vec3Node]) => {
   const upRef = select(lessThan(abs(n.y), float(0.99)), vec3(0, 1, 0), vec3(1, 0, 0));
   const t1 = normalize(cross(upRef, n));
   const t2 = cross(n, t1);
-  const h0 = fbm(n.mul(DETAIL_FREQ));
-  const hx = fbm(normalize(n.add(t1.mul(DETAIL_EPS))).mul(DETAIL_FREQ));
-  const hy = fbm(normalize(n.add(t2.mul(DETAIL_EPS))).mul(DETAIL_FREQ));
+  const h0 = fbm3(n.mul(DETAIL_FREQ), CRATER_DETAIL_OCTAVES);
+  const hx = fbm3(normalize(n.add(t1.mul(DETAIL_EPS))).mul(DETAIL_FREQ), CRATER_DETAIL_OCTAVES);
+  const hy = fbm3(normalize(n.add(t2.mul(DETAIL_EPS))).mul(DETAIL_FREQ), CRATER_DETAIL_OCTAVES);
   const grad = t1
     .mul(hx.sub(h0))
     .add(t2.mul(hy.sub(h0)))
