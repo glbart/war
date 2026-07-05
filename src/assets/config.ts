@@ -78,6 +78,14 @@ export const EJECTA_COUNT_BY_YIELD: Record<number, number> = { 1: 40, 10: 80, 10
 export const EJECTA_SPEED_BY_YIELD: Record<number, number> = { 1: 0.12, 10: 0.2, 100: 0.32 };
 export const EJECTA_GRAVITY = 0.6; // «сила тяжести» параболы (единицы радиуса/с²)
 
+// Процедурная детализация суши на зуме (дистанции камеры до поверхности; радиус планеты = 1).
+export const DETAIL_NEAR = 2.0; // ближе — полная деталь
+export const DETAIL_FAR = 3.6; // дальше — детали нет (как раньше)
+export const DETAIL_ALBEDO_AMP = 0.16; // амплитуда вариации цвета
+export const DETAIL_NORMAL_STR = 0.5; // сила микрорельефа суши
+export const DETAIL_FREQ = 60.0; // частота detail-шума (высокая — мелкая деталь)
+export const DETAIL_OCTAVES = 3;
+
 // Карта рельефа (bump) глобуса — единственная оставшаяся сетевая текстура (best-effort).
 export const EARTH_TOPO_URL = 'https://unpkg.com/three-globe@2.31.0/example/img/earth-topology.png';
 
