@@ -266,7 +266,11 @@ export class OceanShell {
       new THREE.SphereGeometry(R_OCEAN, OCEAN_LON_SEG, OCEAN_LAT_SEG),
       mat,
     );
-    this.mesh.renderOrder = 1; // после глобуса (0), до атмосферы-additive
+    // Рисуется после глобуса (opaque, renderOrder 0) — задняя полусфера отсекается depthTest'ом
+    // по записанной глобусом глубине. Атмосфера (GlobeView) тоже renderOrder 0, но transparent+
+    // additive+BackSide: она уходит в тот же transparent-проход; порядок вода/атмосфера на силуэте
+    // некритичен (оба свечения мягкие) — при желании тонко настраивается в визуальной приёмке.
+    this.mesh.renderOrder = 1;
     parent.add(this.mesh);
   }
 
