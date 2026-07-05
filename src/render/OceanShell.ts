@@ -37,7 +37,7 @@ import {
   positionLocal,
   normalLocal,
   positionWorld,
-  normalWorld,
+  modelNormalMatrix,
   cameraPosition,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
@@ -139,12 +139,13 @@ const ambient = Fn(([d, t]: [Vec3Node, FloatNode]) => {
 });
 
 // Нормаль воды из градиента высоты волн: конечные разности в касательной плоскости к n.
-const waterNormal = Fn(([n, t]: [Vec3Node, FloatNode]) => {
+// Высоту в самой точке (h0) передаём снаружи — она же нужна для пены, чтобы не считать
+// дорогой 5-октавный ambient дважды.
+const waterNormal = Fn(([n, t, h0]: [Vec3Node, FloatNode, FloatNode]) => {
   // касательный базис у n; у полюса (|n.y|≈1) берём иную опорную ось, чтобы cross не выродился
   const upRef = select(lessThan(abs(n.y), float(0.99)), vec3(0, 1, 0), vec3(1, 0, 0));
   const t1 = normalize(cross(upRef, n));
   const t2 = cross(n, t1);
-  const h0 = ambient(n, t);
   const hx = ambient(normalize(n.add(t1.mul(NORMAL_E))), t);
   const hy = ambient(normalize(n.add(t2.mul(NORMAL_E))), t);
   const grad = t1
@@ -194,20 +195,26 @@ export class OceanShell {
     mat.positionNode = positionLocal.add(normalLocal.mul(disp));
 
     // --- Фрагмент (мир-пространство, как атмосфера: без света, вручную) ---
-    const V = normalize(cameraPosition.sub(positionWorld));
-    const N0 = normalWorld; // базовая геонормаль сферы
+    const V = normalize(cameraPosition.sub(positionWorld)); // взгляд — мировой кадр
 
-    // Нормаль постоянного волнения (fbm-волны — основной облик).
-    const Nwave = waterNormal(N0, t);
-    // Добавка от градиента поля удара: наклон нормали в касательной плоскости по uv-разностям.
+    // Пространственный ключ волн/пены — ЛОКАЛЬНЫЙ кадр глобуса (стабилен при вращении spinGroup;
+    // мировая нормаль в фиксированной точке крутится с автоповоротом → узор бы «плыл»).
+    const nLocal = normalLocal;
+    const hAmb = ambient(nLocal, t); // высота волн — один раз, для нормали И для пены
+
+    // Нормаль постоянного волнения (fbm-волны — основной облик) в локальном кадре.
+    const NwaveLocal = waterNormal(nLocal, t, hAmb);
+    // Добавка от градиента поля удара: наклон нормали по uv-разностям (поле тоже локально-привязано).
     const fgx = texture(fieldTex, uv().add(vec2(FIELD_EPS, 0))).r.sub(fieldH);
     const fgy = texture(fieldTex, uv().add(vec2(0, FIELD_EPS))).r.sub(fieldH);
-    const upRef = select(lessThan(abs(N0.y), float(0.99)), vec3(0, 1, 0), vec3(1, 0, 0));
-    const tb1 = normalize(cross(upRef, N0));
-    const tb2 = cross(N0, tb1);
-    const N = normalize(
-      Nwave.sub(tb1.mul(fgx.mul(FIELD_NORMAL)).add(tb2.mul(fgy.mul(FIELD_NORMAL)))),
+    const upRef = select(lessThan(abs(nLocal.y), float(0.99)), vec3(0, 1, 0), vec3(1, 0, 0));
+    const tb1 = normalize(cross(upRef, nLocal));
+    const tb2 = cross(nLocal, tb1);
+    const nPerturbed = normalize(
+      NwaveLocal.sub(tb1.mul(fgx.mul(FIELD_NORMAL)).add(tb2.mul(fgy.mul(FIELD_NORMAL)))),
     );
+    // Возмущённую ЛОКАЛЬНУЮ нормаль → мировой кадр для освещения (солнце/Френель/блик — мировые).
+    const N = normalize(modelNormalMatrix.mul(nPerturbed));
 
     // Цвет: глубина по берегу (мелководье → глубина).
     const clar = 0.7; // «прозрачность» из мокапа (mix(0.25,1.0, 0.6))
@@ -233,10 +240,9 @@ export class OceanShell {
     const diff = clamp(dot(N, sun), 0, 1);
     col = col.mul(float(0.55).add(diff.mul(0.55)));
 
-    // Пена: гребни постоянных волн + береговая полоса + гребни удара (высота поля).
-    const hAmb = ambient(N0, t);
+    // Пена: гребни постоянных волн (hAmb посчитан выше) + береговая полоса + гребни удара.
     const crest = smoothstep(0.35, 0.9, hAmb).mul(FOAM);
-    const shoreNoise = fbm(N0.mul(90.0).add(vec3(0.0, 0.0, t.mul(0.4))));
+    const shoreNoise = fbm(nLocal.mul(90.0).add(vec3(0.0, 0.0, t.mul(0.4))));
     const shoreFoam = oneMinus(coast)
       .mul(smoothstep(0.2, 0.6, shoreNoise))
       .mul(FOAM * 0.8);
@@ -248,7 +254,9 @@ export class OceanShell {
     // Discard суши по CoastField: прозрачность 0 там, где coast≈0 (суша); мягкий берег.
     mat.opacityNode = smoothstep(0.02, 0.08, coast);
     mat.transparent = true;
-    mat.depthWrite = true;
+    // depthWrite=false — как у прочих transparent-оверлеев проекта (Decal/Explosion/WaterBurst):
+    // пиксели суши (opacity 0) не должны писать глубину на R_OCEAN и оклюзировать полосу r∈[1,R_OCEAN].
+    mat.depthWrite = false;
     // Страховка от z-fighting с ocean-цветом глобуса (в дополнение к R_OCEAN>1).
     mat.polygonOffset = true;
     mat.polygonOffsetFactor = -1;
