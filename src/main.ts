@@ -65,7 +65,7 @@ async function boot() {
   });
 
   // Мост sim↔render: ракеты, взрывы (огонь/волна/частицы), кратеры-декали, тряска камеры, звук.
-  const scene = new Scene(renderer.ctx, globe, host, rig);
+  const scene = new Scene(renderer.ctx, globe, host, rig, damageField);
 
   // Тайлы спутниковых снимков + границ/названий поверх глобуса.
   const tiles = new TileLayers(renderer.ctx, globe, rig);
