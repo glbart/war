@@ -17,6 +17,7 @@ import {
   float,
   clamp,
   mix,
+  smoothstep,
   texture,
   uv,
   positionLocal,
@@ -57,10 +58,16 @@ export class GlobeView {
       normalLocal.mul(depth.mul(float(MAX_CRATER_DEPTH))),
     );
 
-    // Перекраска: биом-цвет → копоть по каналу G → тёмная вода/полынья по каналу B.
+    // Перекраска: биом-цвет → копоть по каналу G → полынья по каналу B (Task 11).
     const base = texture(biomeTex, uv()).rgb;
     const charred = mix(base, vec3(0.06, 0.05, 0.05), clamp(dmg.g, 0, 1));
-    const molten = mix(charred, vec3(0.05, 0.12, 0.2), clamp(dmg.b, 0, 1));
+    // Профиль B — «чаша»: максимум в центре воронки, спад к краю пятна. Поэтому цвет полыньи
+    // задаём двумя порогами по возрастанию B: сперва суша светлеет до битого льда (кайма),
+    // затем в центре (где B выше всего) темнеет до открытой воды.
+    const iceRim = smoothstep(0.15, 0.4, dmg.b); // 0..1: суша → светлая ледяная крошка
+    const openWater = smoothstep(0.45, 0.75, dmg.b); // 0..1: кайма льда → тёмная вода в центре
+    const withIceRim = mix(charred, vec3(0.7, 0.78, 0.85), iceRim);
+    const molten = mix(withIceRim, vec3(0.05, 0.12, 0.2), openWater);
     earthMaterial.colorNode = molten;
 
     this.tiltGroup = new THREE.Group();
