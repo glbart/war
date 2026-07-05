@@ -1,4 +1,6 @@
-// Накопительное equirect-поле урона планеты. R=глубина воронки, G=гарь, B=оплавление/полынья.
+// Накопительное equirect-поле урона планеты. Каналы: R=глубина чаши (вниз), G=гарь-градиент
+// (широкий, мягкий, шире самой чаши), B=оплавление/полынья (лёд, как раньше), A=вал+эжекта
+// (вверх — кольцевой бугор породы и лёгкое наслоение выброса за ним).
 // Splat — разовый рендер мягкого штампа в точку эпицентра (не на кадр). Кратеры сливаются
 // поканальным max (наложения дают самую глубокую воронку, а не суммарную дыру).
 //
@@ -27,12 +29,20 @@ import {
   texture,
   max,
   sin,
+  exp,
   PI,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
 import { dirToLonLat } from '../sim/geo';
-import { DAMAGE_TEX_W, DAMAGE_TEX_H } from '../assets/config';
+import {
+  DAMAGE_TEX_W,
+  DAMAGE_TEX_H,
+  CRATER_RIM_FRAC,
+  CRATER_RIM_WIDTH_FRAC,
+  CRATER_EJECTA_FRAC,
+  CRATER_SCORCH_FRAC,
+} from '../assets/config';
 
 const ANG_BY_YIELD: Record<number, number> = { 1: 0.03, 10: 0.05, 100: 0.09 };
 
@@ -87,11 +97,21 @@ export class DamageField {
     // v = uv().y, lat = π/2 − v·π — так что множитель по U масштабируем на sin(v·π).
     const latWeight = sin(uv().y.mul(PI));
     const d = length(sub(uv(), this.uCenter).mul(vec2(float(2).mul(latWeight), 1)));
-    const bowl = smoothstep(this.uRadius, float(0), d); // 1 в центре → 0 на краю
-    const depth = clamp(bowl, 0, 1);
-    const char = clamp(bowl.mul(0.8), 0, 1);
-    const melt = clamp(bowl.mul(this.uKind), 0, 1); // только лёд
-    const stamp = vec4(depth, char, melt, 1);
+    // dNorm — та же нормировка, что и в чистом craterProfile (src/render/effects/craterProfile.ts):
+    // 0 в центре, 1 на краю чаши, >1 снаружи (вал/эжекта). Формулы ниже — его TSL-зеркало.
+    const dNorm = d.div(this.uRadius);
+    const depth = smoothstep(float(1), float(0), dNorm); // чаша: 1 в центре → 0 на краю
+    const rimX = dNorm.sub(CRATER_RIM_FRAC).div(CRATER_RIM_WIDTH_FRAC);
+    const rim = exp(rimX.mul(rimX).negate()); // вал: гаусс за краем чаши
+    const ejecta = smoothstep(float(CRATER_EJECTA_FRAC), float(CRATER_RIM_FRAC), dNorm);
+    const scorch = smoothstep(float(CRATER_SCORCH_FRAC), float(0), dNorm); // широкая гарь
+    const melt = clamp(depth.mul(this.uKind), 0, 1); // только лёд, форма как у чаши
+    const stamp = vec4(
+      clamp(depth, 0, 1),
+      clamp(scorch, 0, 1),
+      melt,
+      clamp(rim.add(ejecta.mul(0.35)), 0, 1),
+    );
     // Поканальный max с предыдущим состоянием поля (см. комментарий вверху файла про
     // WebGL2-несовместимость CustomBlending+MaxEquation) — обычный опаковый вывод.
     const prevSample = texture(this.prevRt.texture, uv());

@@ -32,6 +32,13 @@ export const GLOBE_LON_SEG = 384;
 export const GLOBE_LAT_SEG = 192;
 export const MAX_CRATER_DEPTH = 0.012; // доля радиуса планеты
 
+// Профиль кратера суши (в долях радиуса чаши uRadius): где вал, его ширина, докуда эжекта/гарь.
+export const CRATER_RIM_FRAC = 1.18; // центр кольца-вала (снаружи чаши)
+export const CRATER_RIM_WIDTH_FRAC = 0.28; // полуширина гаусса вала
+export const CRATER_EJECTA_FRAC = 2.6; // докуда стелется выброс
+export const CRATER_SCORCH_FRAC = 2.0; // радиус мягкого гарь-градиента (шире чаши)
+export const CRATER_RIM_HEIGHT = 0.006; // высота вала над поверхностью (доля радиуса планеты)
+
 // Водная оболочка океана (OceanShell): анимированная сфера чуть выше глобуса.
 export const R_OCEAN = 1.0008; // чуть выше глобуса (r=1) — против z-fighting с ocean-цветом
 export const OCEAN_LON_SEG = 384;
