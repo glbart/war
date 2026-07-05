@@ -1,0 +1,27 @@
+{
+  "name": "nuke-strategy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . && prettier --check ."
+  },
+  "dependencies": {
+    "three": "0.185.1",
+    "miniplex": "2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vite": "8.1.3",
+    "vitest": "4.1.9",
+    "eslint": "^9.0.0",
+    "typescript-eslint": "^8.0.0",
+    "prettier": "^3.0.0",
+    "@types/three": "0.185.0"
+  }
+}
