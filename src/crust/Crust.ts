@@ -96,6 +96,11 @@ export class Crust {
     this.removedVoxels = 0;
   }
 
+  // Кол-во материализованных чанков — для тестов ленивости/перф-санити.
+  get materializedChunks(): number {
+    return this.chunks.size;
+  }
+
   // Детерминированный хеш → [0,1): рваные края carve-эллипсоида без Math.random.
   private static jitter(face: number, x: number, y: number, seed: number): number {
     let h = (face * 73856093) ^ (x * 19349663) ^ (y * 83492791) ^ (seed * 2654435761);
@@ -147,10 +152,13 @@ export class Crust {
                 const rv = 1 - (d + 0.5) * CRUST_VOX_H;
                 const s = (rv - centerR) / radR;
                 if (t * t + s * s > jit) continue;
-                chunk ??= this.ensureChunk(face, cx, cy);
                 const idx = (ly * CH + lx) * D + d;
-                const m = chunk[idx] ?? MAT_EMPTY;
+                // Читаем материал БЕЗ материализации чанка: если чанк ещё не создан —
+                // через getVoxel (Map + pristine-фолбэк), иначе — быстрый путь по массиву.
+                const m = chunk ? (chunk[idx] ?? MAT_EMPTY) : this.getVoxel(face, x, y, d);
                 if (m === MAT_EMPTY || m === MAT_WATER) continue;
+                // Материализуем чанк ТОЛЬКО когда реально есть что стереть.
+                chunk ??= this.ensureChunk(face, cx, cy);
                 chunk[idx] = MAT_EMPTY;
                 removed++;
                 removedInColumn++;

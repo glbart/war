@@ -36,6 +36,8 @@ describe('Crust.carve', () => {
     const crust = new Crust();
     const res = crust.carve(PACIFIC, 0.046, 5, 42);
     expect(res.removed).toBe(0);
+    // ничего не стёрто → ни один чанк не должен материализоваться (ленивость хранения)
+    expect(crust.materializedChunks).toBe(0);
   });
 
   it('выбитые воксели действительно пустые (в центре удара)', () => {
