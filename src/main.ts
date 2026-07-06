@@ -2,6 +2,7 @@ import { createRenderer } from './render/Renderer';
 import { GameLoop } from './core/GameLoop';
 import { GlobeView } from './render/GlobeView';
 import { DamageField } from './render/DamageField';
+import { HoleMask } from './render/HoleMask';
 import { TileLayers } from './render/TileLayers';
 import { Scene } from './render/Scene';
 import { CameraRig } from './input/CameraRig';
@@ -42,10 +43,13 @@ async function boot() {
   // Поле урона планеты (Task 7): equirect RGBA8 — заполняется splat() в Scene (Task 9),
   // здесь только создаём и прокидываем текстуру в материал глобуса.
   const damageField = new DamageField(renderer.ctx);
+  // Маска дырок коры (Task 8): равнина, куда врезаются воксельные чанки CrustView — глобус
+  // discard'ит эти регионы (Task 10 передаст holeMask в Scene, которая пометит чанки при carve).
+  const holeMask = new HoleMask(renderer.ctx);
 
   // Глобус + атмосфера; дожидаемся готовности текстуры (или процедурного фолбэка),
   // прежде чем включать управление камерой и цикл рендера.
-  const globe = new GlobeView(renderer.ctx, damageField.texture);
+  const globe = new GlobeView(renderer.ctx, damageField.texture, holeMask.texture);
   await globe.whenReady();
 
   const rig = new CameraRig(renderer.ctx, globe);
