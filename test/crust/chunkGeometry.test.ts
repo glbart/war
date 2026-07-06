@@ -21,11 +21,12 @@ describe('buildChunkGeo', () => {
     const g = geo!;
     expect(g.positions.length % 3).toBe(0);
     expect(g.indices.length % 3).toBe(0);
-    // радиусы вершин в разумном диапазоне: [дно коры − ε .. 1 + ε]
+    // радиусы вершин в разумном диапазоне: [дно коры − ε .. потолок крышки (1−LID_DROP) + ε]
+    const LID_DROP = 0.0005;
     for (let i = 0; i < g.positions.length; i += 3) {
       const r = Math.hypot(g.positions[i]!, g.positions[i + 1]!, g.positions[i + 2]!);
       expect(r).toBeGreaterThan(0.9);
-      expect(r).toBeLessThanOrEqual(1.0 + 1e-6);
+      expect(r).toBeLessThanOrEqual(1.0 - LID_DROP + 1e-6);
     }
     // uv в [0,1]
     for (const t of g.uvs) {
@@ -35,18 +36,19 @@ describe('buildChunkGeo', () => {
     expect(g.mats.length).toBe(g.positions.length / 3);
   });
 
-  it('нетронутая поверхность чанка лежит на сфере r=1 (крышка)', () => {
+  it('нетронутая поверхность чанка лежит на волосок под сферой r=1−LID_DROP (крышка)', () => {
     const crust = new Crust();
     crust.carve(SAHARA, 0.02, 2, 42); // маленький удар — большая часть чанка нетронута
     const { face, u, v } = dirToFaceUV(SAHARA);
     const cx = Math.floor((u * CRUST_FACE_N) / CRUST_CHUNK);
     const cy = Math.floor((v * CRUST_FACE_N) / CRUST_CHUNK);
     const g = buildChunkGeo(crust, face, cx, cy)!;
-    let atSphere = 0;
+    const LID_DROP = 0.0005;
+    let atLid = 0;
     for (let i = 0; i < g.positions.length; i += 3) {
       const r = Math.hypot(g.positions[i]!, g.positions[i + 1]!, g.positions[i + 2]!);
-      if (Math.abs(r - 1) < 1e-6) atSphere++;
+      if (Math.abs(r - (1 - LID_DROP)) < 1e-6) atLid++;
     }
-    expect(atSphere).toBeGreaterThan(10); // крышка нетронутой части прижата к сфере
+    expect(atLid).toBeGreaterThan(10); // крышка нетронутой части прижата к потолку 1−LID_DROP
   });
 });

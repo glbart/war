@@ -30,7 +30,6 @@ import type { ThreeCtx } from './Renderer';
 import { Crust, MAT_SOIL, MAT_BASALT, MAT_WATER } from '../crust/Crust';
 import { buildChunkGeo } from '../crust/chunkGeometry';
 import type { FaceId } from '../crust/cubesphere';
-import type { HoleMask } from './HoleMask';
 import { CRUST_LAYER_COLORS, CRATER_MATERIAL_COLORS } from '../assets/config';
 
 // Узловой тип для промежуточной vec3-переменной (как в OceanShell/GlobeView): вытаскиваем
@@ -48,7 +47,6 @@ export class CrustView {
     private readonly ctx: ThreeCtx,
     parent: THREE.Group,
     private readonly crust: Crust,
-    private readonly holeMask: HoleMask,
     biomeTex: THREE.Texture,
     damageTex: THREE.Texture,
   ) {
@@ -90,7 +88,9 @@ export class CrustView {
     this.material = mat;
   }
 
-  // Ремешит перечисленные чанки (ключ 'f:cx:cy'): удаляет старый меш, строит новый, метит маску.
+  // Ремешит перечисленные чанки (ключ 'f:cx:cy'): удаляет старый меш, строит новый. Маску дырок
+  // (HoleMask) больше не метит — она красится по диску реального карва в Scene.startExplosion,
+  // а не по AABB чанка (см. HoleMask.markCarve).
   update(changedKeys: string[]): void {
     const { THREE } = this.ctx;
     for (const key of changedKeys) {
@@ -102,7 +102,6 @@ export class CrustView {
         this.meshes.delete(key);
       }
       const geo = buildChunkGeo(this.crust, f, cx, cy);
-      this.holeMask.markChunk(f, cx, cy);
       if (!geo) continue; // чанк выеден полностью — дырку закрывает магма-сфера
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(geo.positions, 3));
@@ -122,6 +121,5 @@ export class CrustView {
       mesh.geometry.dispose();
     }
     this.meshes.clear();
-    this.holeMask.clear();
   }
 }

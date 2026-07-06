@@ -59,7 +59,7 @@ export class Scene {
     host: SimHost,
     private readonly rig: CameraRig,
     private readonly damageField: DamageField,
-    holeMask: HoleMask,
+    private readonly holeMask: HoleMask,
   ) {
     void host; // пока не используется — события приходят через handleEvents(), не через host
     this.missileView = new MissileView(ctx, globe.spinGroup);
@@ -79,7 +79,6 @@ export class Scene {
       ctx,
       globe.spinGroup,
       this.crust,
-      holeMask,
       globe.biomeTexture,
       damageField.texture,
     );
@@ -107,6 +106,7 @@ export class Scene {
         this.waterField.clear();
         this.crust.reset();
         this.crustView.clear();
+        this.holeMask.clear();
         break;
       default:
         break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
@@ -143,6 +143,8 @@ export class Scene {
         seed,
       );
       this.crustView.update(carved.changed);
+      // Дискард глобуса — по ДИСКУ реального карва (не по AABB чанка): см. HoleMask.markCarve
+      this.holeMask.markCarve(dir, CRUST_RADIUS_BY_YIELD[yieldMt] ?? 0.02);
     }
     playBoom(yieldMt);
   }
