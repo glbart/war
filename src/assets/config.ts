@@ -106,3 +106,22 @@ export const EARTH_TOPO_URL = 'https://unpkg.com/three-globe@2.31.0/example/img/
 // вместе с фичей материала — планета рисуется биом-картой, а не фото).
 export const TILE_LABELS_URL = (z: number, x: number, y: number): string =>
   `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`;
+
+// ---------- Воксельная кора (спека 2026-07-06-voxel-crust-design.md) ----------
+// Оболочка cube-sphere: 6 граней × N×N столбцов × D слоёв вглубь. Воксель ~1/15 диаметра
+// кратера 100Мт. Чанки CH×CH×D ремешатся по отдельности (Surface Nets).
+export const CRUST_FACE_N = 256; // столбцов по стороне грани
+export const CRUST_DEPTH_LAYERS = 8; // слоёв вглубь
+export const CRUST_CHUNK = 32; // сторона чанка в столбцах (256/32 = 8×8 чанков на грань)
+export const CRUST_VOX_ANG = Math.PI / 2 / CRUST_FACE_N; // угловой размер вокселя у центра грани
+export const CRUST_VOX_H = CRUST_VOX_ANG; // радиальная толщина слоя (≈кубический воксель)
+export const MAGMA_R = 0.945; // радиус магма-сферы под корой (кора: 1 − 8·VOX_H ≈ 0.951)
+// Радиус (рад) и глубина (в слоях) carve по мощности: 100Мт ≈ 15 вокселей в поперечнике.
+export const CRUST_RADIUS_BY_YIELD: Record<number, number> = { 1: 0.009, 10: 0.022, 100: 0.046 };
+export const CRUST_DEPTH_BY_YIELD: Record<number, number> = { 1: 1.5, 10: 3, 100: 5 };
+// Палитра слоёв коры (r,g,b 0..1): порода/базальт/морское дно; грунт красится биомом.
+export const CRUST_LAYER_COLORS = {
+  rock: [0.32, 0.27, 0.23],
+  basalt: [0.16, 0.14, 0.15],
+  seabed: [0.08, 0.17, 0.26],
+} as const;
