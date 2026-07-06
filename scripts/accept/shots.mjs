@@ -276,6 +276,14 @@ async function main() {
     await sleep(300);
     await screenshot('08-crust-limb.png');
 
+    // Возвращаем камеру на кратер и ждём затухания всех взрывных эффектов (огненный шар,
+    // кольца ударной волны, свечение), чтобы визуально подтвердить прогрессию воронки —
+    // гранёные стенки (Surface Nets), слои породы/базальта и магму на дне (кора пробита
+    // тремя ударами по 100Мт).
+    await evalJs('window.__lookAt(20, 23)');
+    await sleep(12000);
+    await screenshot('09-crust-settled.png'); // кратер после затухания взрыва — воронка, слои породы, магма на дне (3×100Мт пробивают кору)
+
     writeFileSync(path.join(OUT_DIR, 'console-log.json'), JSON.stringify(consoleLog, null, 2));
     console.log('Консоль-лог сохранён. Всего записей:', consoleLog.length);
 
