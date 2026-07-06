@@ -251,6 +251,25 @@ async function main() {
     await sleep(500);
     await screenshot('04-after-reset.png');
 
+    // --- Прогрессия: три удара 100Мт в одну точку (воксельная кора копается до магмы) ---
+    console.log('Прогрессия: 3×100Мт в одну точку...');
+    await evalJs('window.__reset()');
+    await sleep(500);
+    await evalJs('window.__lookAt(20, 23)');
+    await evalJs('window.__strike(20, 23, 100)');
+    await sleep(4000);
+    await screenshot('05-crust-hit1.png');
+    await evalJs('window.__strike(20, 23, 100)');
+    await sleep(4000);
+    await screenshot('06-crust-hit2.png');
+    await evalJs('window.__strike(20, 23, 100)');
+    await sleep(4000);
+    await screenshot('07-crust-hit3.png');
+    // скол на силуэте: удар по краю видимого диска
+    await evalJs('window.__lookAt(60, 10)');
+    await sleep(300);
+    await screenshot('08-crust-limb.png');
+
     writeFileSync(path.join(OUT_DIR, 'console-log.json'), JSON.stringify(consoleLog, null, 2));
     console.log('Консоль-лог сохранён. Всего записей:', consoleLog.length);
 
