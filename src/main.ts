@@ -75,6 +75,12 @@ async function boot() {
   // Мост sim↔render: ракеты, взрывы (огонь/волна/частицы), кратеры-декали, тряска камеры, звук.
   const scene = new Scene(renderer.ctx, globe, host, rig, damageField);
 
+  // Dev-зонд поля воды (__waterStats) — как и installDevHooks, только в dev-сборке.
+  if (import.meta.env.DEV) {
+    const { installWaterProbe } = await import('./debug/devHooks');
+    installWaterProbe(scene);
+  }
+
   // Тайлы спутниковых снимков + границ/названий поверх глобуса.
   const tiles = new TileLayers(renderer.ctx, globe, rig);
   let tileAcc = 0;

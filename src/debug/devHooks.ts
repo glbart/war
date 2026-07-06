@@ -1,5 +1,6 @@
 import type { SimHost } from '../sim/SimHost';
 import type { GlobeView } from '../render/GlobeView';
+import type { Scene } from '../render/Scene';
 import { lonLatToDir } from '../sim/geo';
 
 // Dev-инструменты headless-приёмки (Task 12): вешают на window хуки для нанесения ударов,
@@ -28,4 +29,13 @@ export function installDevHooks(host: SimHost, globe: GlobeView): void {
     globe.spinGroup.rotation.y = Math.atan2(-dir.x, dir.z);
     globe.tiltGroup.rotation.x = latRad;
   };
+}
+
+// __waterStats() — readback поля воды (min/max высоты R и скорости G): прямой факт «есть ли
+// энергия в поле» без интерпретации через шейдинг. Ставится отдельным вызовом, потому что
+// Scene создаётся в main.ts ПОЗЖЕ installDevHooks (ей нужны globe и damageField).
+export function installWaterProbe(scene: Scene): void {
+  const w = window as unknown as Record<string, unknown>;
+  w.__waterStats = (which: 'stable' | 'sim' = 'stable') => scene.debugWaterStats(which);
+  w.__waterFill = (value: number) => scene.debugWaterFill(value);
 }

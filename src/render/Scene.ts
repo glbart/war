@@ -95,8 +95,8 @@ export class Scene {
   startExplosion(dir: Vec3, yieldMt: number, seed: number, surface: Surface, biome: Biome): void {
     this.triggerShake(yieldMt);
     if (surface === 'water') {
-      this.waterBurstView.spawn(dir, yieldMt, seed);
-      // Интерактивное поле: импульс каверны/ряби (сила/радиус по мощности).
+      // Только волны: рябь/каверна в поле (WaterField) → анимированная OceanShell. Старый купол/
+      // столб/кольцо (WaterBurstView) убран — вода реагирует волнами, без «конуса».
       this.waterField.splat(
         dir,
         WATER_SPLAT_STRENGTH[yieldMt] ?? 1,
@@ -116,6 +116,17 @@ export class Scene {
   private triggerShake(yieldMt: number): void {
     const ys = SHAKE_SCALE_BY_YIELD[yieldMt] ?? 1;
     this.rig.shake = Math.max(this.rig.shake, SHAKE_PER_UNIT * ys);
+  }
+
+  // Dev-зонды поля воды (только для dev-хуков, см. src/debug/devHooks.ts).
+  debugWaterFill(value: number): void {
+    this.waterField.debugFill(value);
+  }
+
+  debugWaterStats(
+    which: 'stable' | 'sim' = 'stable',
+  ): Promise<{ hMin: number; hMax: number; vMin: number; vMax: number }> {
+    return this.waterField.debugStats(which);
   }
 
   // Двигает вьюхи на dt секунд реального времени (вызывается из render-колбэка GameLoop).

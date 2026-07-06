@@ -9,7 +9,6 @@ import {
   dot,
   cross,
   sub,
-  length,
   normalize,
   pow,
   oneMinus,
@@ -39,12 +38,6 @@ import {
   CRATER_MATERIAL_COLORS,
   CRATER_DETAIL_OCTAVES,
   CRATER_DETAIL_STRENGTH,
-  DETAIL_NEAR,
-  DETAIL_FAR,
-  DETAIL_ALBEDO_AMP,
-  DETAIL_NORMAL_STR,
-  DETAIL_FREQ,
-  DETAIL_OCTAVES,
 } from '../assets/config';
 import { buildBiomeCanvas } from './MaterialGlobe';
 import { fbm3 } from './noise';
@@ -104,10 +97,10 @@ export class GlobeView {
     const dmg = texture(damageTex, uv());
     const depth = dmg.r;
 
-    // Сила процедурной детализации суши по дистанции камеры до фрагмента: вблизи 1, вдали 0.
-    // Форма совпадает с чистой detailStrength(dist, NEAR, FAR) — smoothstep(FAR, NEAR, dist).
-    const camDist = length(sub(cameraPosition, positionWorld));
-    const detailK = smoothstep(float(DETAIL_FAR), float(DETAIL_NEAR), camDist);
+    // 2B «детализация на зуме» откачена: detailK считался от расстояния камера→ФРАГМЕНТ (~2.2 при
+    // обычном зуме, а не 3.2 к центру), поэтому деталь включалась почти на полную и читалась как
+    // серое зерно по всей полусфере; к тому же «мыло» она не убирала. Detail-albedo/нормаль убраны,
+    // остаётся только кратер-микрорельеф (2A). Правильный LOD — отдельная переработка.
     // Деформация: дно чаши вдавлено вдоль нормали на R·MAX_CRATER_DEPTH, вал/эжекта приподняты на
     // A·CRATER_RIM_HEIGHT. Обязательно локальные position/normal — сфера в объектных координатах.
     const rimUp = dmg.a.mul(float(CRATER_RIM_HEIGHT));
@@ -122,12 +115,9 @@ export class GlobeView {
     // Detail-albedo: мелкая светлотная вариация вокруг биом-цвета (высокочастотный fbm по
     // positionLocal), гаснущая вдали через detailK. Применяется ДО кратер-зон — кратер строится
     // ОТ baseDetailed и доминирует ПОВЕРХ детали, а не зашумляется ею.
-    const detN = fbm3(positionLocal.mul(float(DETAIL_FREQ)), DETAIL_OCTAVES); // 0..1
-    const detVar = detN.sub(0.5).mul(float(DETAIL_ALBEDO_AMP)).mul(detailK);
-    const baseDetailed = base.mul(float(1).add(detVar));
     // 1) широкая гарь — мягкое потемнение биома ГРАДИЕНТОМ по каналу G (не слэб near-black):
     const scorched = mix(
-      baseDetailed,
+      base,
       vec3(cm.scorch[0], cm.scorch[1], cm.scorch[2]),
       clamp(dmg.g.mul(0.8), 0, 1),
     );
@@ -169,18 +159,11 @@ export class GlobeView {
       CRATER_DETAIL_OCTAVES,
       CRATER_DETAIL_RELIEF,
     );
-    const detailGrad = heightGrad(normalLocal, DETAIL_FREQ, DETAIL_OCTAVES, DETAIL_NORMAL_STR);
-    // кратер-градиент гейтим маской, detail-градиент — дистанцией; сумма → возмущённая локнормаль
-    const perturbedLocal = normalize(
-      normalLocal.sub(craterGrad.mul(craterMask).add(detailGrad.mul(detailK))),
-    );
+    // Возмущение нормали ТОЛЬКО в кратере (craterMask). Вне кратера craterMask=0 → остаётся
+    // materialNormal (топо-bump), вид как раньше. (2B detail-нормаль убрана — см. коммент выше.)
+    const perturbedLocal = normalize(normalLocal.sub(craterGrad.mul(craterMask)));
     const detailView = transformNormalToView(perturbedLocal);
-    // Смешиваем с базовой нормалью (топо-bump): в кратере — по craterMask, на суше на зуме — по
-    // detailK. Вдали и вне кратера blend≈0 → остаётся materialNormal (вид как раньше). Detail-вклад
-    // кэпим (×0.85), чтобы даже на макс-зуме реальный топо-рельеф континентов частично жил и горы не
-    // сплющивались в изотропный шум; кратер по-прежнему может доходить до 1 (он ДОЛЖЕН перекрывать).
-    const blend = clamp(craterMask.add(detailK.mul(0.85)), 0, 1);
-    earthMaterial.normalNode = normalize(mix(materialNormal, detailView, blend));
+    earthMaterial.normalNode = normalize(mix(materialNormal, detailView, craterMask));
 
     this.tiltGroup = new THREE.Group();
     this.spinGroup = new THREE.Group();
