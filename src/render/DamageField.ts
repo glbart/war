@@ -45,7 +45,9 @@ import {
   CRATER_SCORCH_FRAC,
 } from '../assets/config';
 
-const ANG_BY_YIELD: Record<number, number> = { 1: 0.03, 10: 0.05, 100: 0.09 };
+// Радиусы поля урона по мощности (доля equirect-UV). Уменьшены ~вдвое по фидбэку
+// пользователя («кратеры слишком большие»): гарь 100Мт больше не накрывает пол-материка.
+const ANG_BY_YIELD: Record<number, number> = { 1: 0.015, 10: 0.025, 100: 0.045 };
 
 // Точные типы юниформов (как в ExplosionView): конкретный overload uniform() вместо размытого
 // объединения перегрузок, чтобы .value имел тип Vector2 / number, а не keyof UniformValue.
