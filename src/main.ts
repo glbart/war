@@ -44,7 +44,7 @@ async function boot() {
   // здесь только создаём и прокидываем текстуру в материал глобуса.
   const damageField = new DamageField(renderer.ctx);
   // Маска дырок коры (Task 8): равнина, куда врезаются воксельные чанки CrustView — глобус
-  // discard'ит эти регионы (Task 10 передаст holeMask в Scene, которая пометит чанки при carve).
+  // discard'ит эти регионы; Scene (Task 10) помечает их при carve через CrustView.
   const holeMask = new HoleMask(renderer.ctx);
 
   // Глобус + атмосфера; дожидаемся готовности текстуры (или процедурного фолбэка),
@@ -77,7 +77,7 @@ async function boot() {
   });
 
   // Мост sim↔render: ракеты, взрывы (огонь/волна/частицы), кратеры-декали, тряска камеры, звук.
-  const scene = new Scene(renderer.ctx, globe, host, rig, damageField);
+  const scene = new Scene(renderer.ctx, globe, host, rig, damageField, holeMask);
 
   // Dev-зонд поля воды (__waterStats) — как и installDevHooks, только в dev-сборке.
   if (import.meta.env.DEV) {

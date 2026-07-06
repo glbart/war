@@ -19,8 +19,17 @@ import type { DamageField } from './DamageField';
 import { WaterField } from './WaterField';
 import { OceanShell } from './OceanShell';
 import { buildCoastTexture } from './CoastField';
+import { Crust } from '../crust/Crust';
+import { CrustView } from './CrustView';
+import { MagmaCore } from './MagmaCore';
+import type { HoleMask } from './HoleMask';
 import { playBoom } from './effects/sound';
-import { WATER_SPLAT_STRENGTH, WATER_SPLAT_RADIUS } from '../assets/config';
+import {
+  WATER_SPLAT_STRENGTH,
+  WATER_SPLAT_RADIUS,
+  CRUST_RADIUS_BY_YIELD,
+  CRUST_DEPTH_BY_YIELD,
+} from '../assets/config';
 
 // Порт shake = Math.max(shake, 0.02 * ys), ys = {1:0.6, 10:1.0, 100:1.7}[yieldMt]
 // (reference/earth-nuke.html ~755) — чем мощнее заряд, тем сильнее толчок камеры.
@@ -36,6 +45,9 @@ export class Scene {
   private readonly decalView: DecalView;
   private readonly waterField: WaterField;
   private readonly oceanShell: OceanShell;
+  private readonly crust: Crust;
+  private readonly crustView: CrustView;
+  private readonly magma: MagmaCore;
   private clock = 0; // общие часы рендера (секунды); база спавна частиц и uTime шейдера
 
   // ctx/globe/host не сохраняются полями — используются только здесь, при постройке владений
@@ -47,6 +59,7 @@ export class Scene {
     host: SimHost,
     private readonly rig: CameraRig,
     private readonly damageField: DamageField,
+    holeMask: HoleMask,
   ) {
     void host; // пока не используется — события приходят через handleEvents(), не через host
     this.missileView = new MissileView(ctx, globe.spinGroup);
@@ -59,6 +72,17 @@ export class Scene {
     this.waterField = new WaterField(ctx);
     const coastTex = buildCoastTexture(ctx);
     this.oceanShell = new OceanShell(ctx, globe.spinGroup, this.waterField.texture, coastTex);
+    // Воксельная кора: состояние + гибрид-рендер + магма-подложка (спека 2026-07-06).
+    this.crust = new Crust();
+    this.magma = new MagmaCore(ctx, globe.spinGroup);
+    this.crustView = new CrustView(
+      ctx,
+      globe.spinGroup,
+      this.crust,
+      holeMask,
+      globe.biomeTexture,
+      damageField.texture,
+    );
   }
 
   // Разбирает события, уже слитые из host.drainEvents() вызывающим кодом (main.ts) —
@@ -81,6 +105,8 @@ export class Scene {
         this.decalView.clear();
         this.damageField.clear();
         this.waterField.clear();
+        this.crust.reset();
+        this.crustView.clear();
         break;
       default:
         break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
@@ -109,6 +135,14 @@ export class Scene {
       this.ejectaView.emit(dir, yieldMt, seed, this.clock);
       this.decalView.spawn(dir, yieldMt, seed);
       this.damageField.splat(dir, yieldMt, surface === 'ice' ? 'ice' : 'land');
+      // Выгрызаем кору: воксельная морфология кратера (displacement демонтирован в GlobeView)
+      const carved = this.crust.carve(
+        dir,
+        CRUST_RADIUS_BY_YIELD[yieldMt] ?? 0.02,
+        CRUST_DEPTH_BY_YIELD[yieldMt] ?? 3,
+        seed,
+      );
+      this.crustView.update(carved.changed);
     }
     playBoom(yieldMt);
   }
@@ -140,5 +174,6 @@ export class Scene {
     this.particlePool.setTime(this.clock);
     this.ejectaView.setTime(this.clock);
     this.decalView.update(dt);
+    this.magma.setTime(this.clock);
   }
 }
