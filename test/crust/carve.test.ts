@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { Crust, MAT_EMPTY, MAT_WATER } from '../../src/crust/Crust';
-import { lonLatToDir } from '../../src/sim/geo';
-import { dirToFaceUV } from '../../src/crust/cubesphere';
-import { CRUST_FACE_N } from '../../src/assets/config';
+import { Crust, MAT_EMPTY, MAT_WATER, carveMaskRadius } from '../../src/crust/Crust';
+import { dot, lonLatToDir } from '../../src/sim/geo';
+import { dirToFaceUV, type FaceId } from '../../src/crust/cubesphere';
+import { CRUST_FACE_N, CRUST_CHUNK } from '../../src/assets/config';
 
 const deg = (x: number) => (x * Math.PI) / 180;
 const SAHARA = lonLatToDir(deg(20), deg(23));
@@ -50,5 +50,46 @@ describe('Crust.carve', () => {
     const top = crust.getVoxel(face, x, y, 0);
     expect([MAT_EMPTY, MAT_WATER]).toContain(top);
     expect(top).toBe(MAT_EMPTY);
+  });
+
+  // Инвариант (см. ревью Task 11): каждый пиксель диска маски дырок (HoleMask.markCarve,
+  // радиус carveMaskRadius(radiusRad)) лежит над чанком, который carve() пометил в changed —
+  // иначе у границы чанка маска накрывает соседа, где меш не перестроен → сквозная дыра.
+  // Проверяем ВСЕ столбцы всех 6 граней, а не только эпицентральный чанк — это ловит и случай,
+  // когда диск маски накрывает соседние чанки через границу.
+  function assertMaskCoveredByChangedChunks(
+    dir: ReturnType<typeof lonLatToDir>,
+    radiusRad: number,
+    depthVox: number,
+    seed: number,
+  ): void {
+    const crust = new Crust();
+    const res = crust.carve(dir, radiusRad, depthVox, seed);
+    const changed = new Set(res.changed);
+    const maskR = carveMaskRadius(radiusRad);
+    let checked = 0;
+    for (let face = 0 as FaceId; face < 6; face++) {
+      for (let y = 0; y < CRUST_FACE_N; y++) {
+        for (let x = 0; x < CRUST_FACE_N; x++) {
+          const colDir = crust.columnDir(face, x, y);
+          const ang = Math.acos(Math.min(1, Math.max(-1, dot(colDir, dir))));
+          if (ang > maskR) continue;
+          checked++;
+          const cx = Math.floor(x / CRUST_CHUNK);
+          const cy = Math.floor(y / CRUST_CHUNK);
+          const key = crust.chunkKey(face, cx, cy);
+          expect(changed.has(key)).toBe(true);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  }
+
+  it('инвариант: каждый столбец под диском маски дырок лежит над задетым (changed) чанком', () => {
+    assertMaskCoveredByChangedChunks(SAHARA, 0.046, 5, 42);
+  });
+
+  it('инвариант держится и для мелкого 1Мт-удара (проверяет фикс cosLim)', () => {
+    assertMaskCoveredByChangedChunks(SAHARA, 0.009, 1.5, 7);
   });
 });

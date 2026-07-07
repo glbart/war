@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Crust } from '../../src/crust/Crust';
-import { buildChunkGeo } from '../../src/crust/chunkGeometry';
+import { buildChunkGeo, LID_DROP } from '../../src/crust/chunkGeometry';
 import { dirToFaceUV } from '../../src/crust/cubesphere';
 import { lonLatToDir } from '../../src/sim/geo';
 import { CRUST_FACE_N, CRUST_CHUNK } from '../../src/assets/config';
@@ -22,7 +22,6 @@ describe('buildChunkGeo', () => {
     expect(g.positions.length % 3).toBe(0);
     expect(g.indices.length % 3).toBe(0);
     // радиусы вершин в разумном диапазоне: [дно коры − ε .. потолок крышки (1−LID_DROP) + ε]
-    const LID_DROP = 0.0005;
     for (let i = 0; i < g.positions.length; i += 3) {
       const r = Math.hypot(g.positions[i]!, g.positions[i + 1]!, g.positions[i + 2]!);
       expect(r).toBeGreaterThan(0.9);
@@ -43,7 +42,6 @@ describe('buildChunkGeo', () => {
     const cx = Math.floor((u * CRUST_FACE_N) / CRUST_CHUNK);
     const cy = Math.floor((v * CRUST_FACE_N) / CRUST_CHUNK);
     const g = buildChunkGeo(crust, face, cx, cy)!;
-    const LID_DROP = 0.0005;
     let atLid = 0;
     for (let i = 0; i < g.positions.length; i += 3) {
       const r = Math.hypot(g.positions[i]!, g.positions[i + 1]!, g.positions[i + 2]!);

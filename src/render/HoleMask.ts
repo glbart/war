@@ -11,7 +11,7 @@ import type * as THREE from 'three/webgpu';
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
 import { dirToLonLat } from '../sim/geo';
-import { CRUST_VOX_ANG } from '../assets/config';
+import { carveMaskRadius } from '../crust/Crust';
 
 const MASK_W = 1024;
 const MASK_H = 512;
@@ -50,10 +50,12 @@ export class HoleMask {
 
   // Закрашивает диск на equirect-маске вокруг направления удара dir. radiusRad — боковой
   // радиус карва (тот же, что уходит в Crust.carve). Запас ×1.25 покрывает джиттер рваного
-  // края эллипсоида (Crust.jitter, до ~±15%/×1.3 по t), +1.5 вокселя — полувоксельное
-  // сглаживание границы Surface Nets по обе стороны шва чанков.
+  // края эллипсоида (Crust.jitter, реальный максимум t ≤ √1.15 ≈ ×1.073), +1.5 вокселя —
+  // полувоксельное сглаживание границы Surface Nets по обе стороны шва чанков.
+  // Формула — carveMaskRadius в Crust.ts, ОДНА на маску и на пометку чанков в carve(): каждый
+  // закрашенный пиксель маски гарантированно лежит над чанком с мешем.
   markCarve(dir: Vec3, radiusRad: number): void {
-    const r = radiusRad * 1.25 + CRUST_VOX_ANG * 1.5;
+    const r = carveMaskRadius(radiusRad);
 
     // Ортобазис к dir — точки окружности диска строятся как наклон dir на угол r в случайном
     // направлении (t1,t2) касательной плоскости.

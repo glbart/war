@@ -30,6 +30,14 @@ export function pristineMaterial(d: number): number {
   return d <= 1 ? MAT_SOIL : d <= 4 ? MAT_ROCK : MAT_BASALT;
 }
 
+// Радиус диска маски дырок (HoleMask) для carve данного радиуса: запас на джиттер края
+// (t ≤ √1.15 ≈ ×1.073 от radiusRad) и полувоксельное сглаживание Surface Nets.
+// ЕДИНСТВЕННЫЙ источник этой формулы: тот же радиус использует carve() для пометки чанков
+// в changed — каждый закрашенный пиксель маски гарантированно лежит над чанком с мешем.
+export function carveMaskRadius(radiusRad: number): number {
+  return radiusRad * 1.25 + CRUST_VOX_ANG * 1.5;
+}
+
 export interface CarveResult {
   changed: string[]; // ключи чанков на ремеш (задетые + боковые соседи)
   removed: number; // сколько вокселей выбито этим ударом
@@ -124,8 +132,14 @@ export class Crust {
     let removed = 0;
     const latR = Math.max(radiusRad, CRUST_VOX_ANG * 0.75); // не уже одного вокселя
     const radR = Math.max(depthVox, 1) * CRUST_VOX_H;
-    // столбцы дальше angLim гарантированно вне эллипсоида (с запасом на джиттер)
-    const cosLim = Math.cos(Math.min(latR * 1.4 + CRUST_VOX_ANG, Math.PI / 2));
+    // Радиус диска маски дырок (HoleMask.markCarve) для этого удара — единственный источник
+    // формулы в carveMaskRadius. Каждый столбец в его пределах обязан лежать над чанком,
+    // который попадёт в changed (даже если сам столбец ничего не потерял) — иначе на границе
+    // чанка маска накрывает соседа, где меш не перестроен, и глобус-дискард показывает дыру
+    // в нетронутую кору (см. ревью Task 11).
+    const maskR = carveMaskRadius(radiusRad);
+    // столбцы дальше angLim гарантированно вне эллипсоида и вне диска маски (с запасом на джиттер)
+    const cosLim = Math.cos(Math.min(Math.max(latR * 1.4 + CRUST_VOX_ANG, maskR), Math.PI / 2));
 
     for (let face = 0 as FaceId; face < 6; face++) {
       for (let cy = 0; cy < N / CH; cy++)
@@ -133,7 +147,11 @@ export class Crust {
           // быстрый чанк-реджект по углу до центра чанка (запас — полдиагонали чанка)
           const chunkDir = this.columnDir(face, cx * CH + CH / 2, cy * CH + CH / 2);
           const chunkHalf = CH * CRUST_VOX_ANG; // с запасом (чанк ≤ CH·voxAng по диагонали/√2·2)
-          if (dot(chunkDir, dir) < Math.cos(Math.min(latR * 1.4 + chunkHalf, Math.PI))) continue;
+          if (
+            dot(chunkDir, dir) <
+            Math.cos(Math.min(Math.max(latR * 1.4, maskR) + chunkHalf, Math.PI))
+          )
+            continue;
 
           let chunk: Uint8Array | null = null;
           for (let ly = 0; ly < CH; ly++)
@@ -144,6 +162,10 @@ export class Crust {
               const cosAng = dot(colDir, dir);
               if (cosAng < cosLim) continue;
               const ang = Math.acos(Math.min(1, cosAng));
+              // Столбец под диском маски дырок — его чанк обязан быть в changed, даже если
+              // ниже ничего не выбито (мешер построит нетронутую крышку 1−LID_DROP, которую
+              // и покажет дискард под маской).
+              if (ang <= maskR) changed.add(this.chunkKey(face, cx, cy));
               const t = ang / latR;
               if (t > 1.3) continue;
               const jit = 1 + (Crust.jitter(face, x, y, seed) - 0.5) * 0.3;
