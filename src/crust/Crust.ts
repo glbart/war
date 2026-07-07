@@ -141,15 +141,35 @@ export class Crust {
     // столбцы дальше angLim гарантированно вне эллипсоида и вне диска маски (с запасом на джиттер)
     const cosLim = Math.cos(Math.min(Math.max(latR * 1.4 + CRUST_VOX_ANG, maskR), Math.PI / 2));
 
+    // Полюсная шапка маски (см. HoleMask.markCarve): если полюс лежит внутри диска маски
+    // (angToPole < maskR), equirect-полигон диска вырождается и markCarve красит ПОЛОСУ от
+    // полюса до противоположного края диска — т.е. сферическую шапку радиусом
+    // capR = angToPole + maskR вокруг полюса (а не сам диск вокруг dir). Если это не отразить
+    // в пометке changed, столбцы шапки вне обычного диска (angToPole ≤ capR, но ang(dir) > maskR)
+    // остаются закрашены маской над чанком без меша → дискард глобуса сквозит магму.
+    const angToNorth = Math.acos(Math.min(1, Math.max(-1, dir.y)));
+    const angToSouth = Math.PI - angToNorth;
+    const capNorth = angToNorth < maskR;
+    const capSouth = angToSouth < maskR;
+    const capActive = capNorth || capSouth;
+    const capR = capActive ? (capNorth ? angToNorth : angToSouth) + maskR : 0;
+    const poleY = capNorth ? 1 : -1; // направление полюса шапки по оси Y
+
     for (let face = 0 as FaceId; face < 6; face++) {
       for (let cy = 0; cy < N / CH; cy++)
         for (let cx = 0; cx < N / CH; cx++) {
           // быстрый чанк-реджект по углу до центра чанка (запас — полдиагонали чанка)
           const chunkDir = this.columnDir(face, cx * CH + CH / 2, cy * CH + CH / 2);
           const chunkHalf = CH * CRUST_VOX_ANG; // с запасом (чанк ≤ CH·voxAng по диагонали/√2·2)
+          // При активной полюсной шапке чанк также годен, если он близко к полюсу шапки —
+          // независимо от расстояния до dir (шапка может лежать далеко от эпицентра по долготе).
+          const chunkNearCap =
+            capActive &&
+            Math.acos(Math.min(1, Math.max(-1, chunkDir.y * poleY))) <= capR + chunkHalf;
           if (
+            !chunkNearCap &&
             dot(chunkDir, dir) <
-            Math.cos(Math.min(Math.max(latR * 1.4, maskR) + chunkHalf, Math.PI))
+              Math.cos(Math.min(Math.max(latR * 1.4, maskR) + chunkHalf, Math.PI))
           )
             continue;
 
@@ -160,12 +180,16 @@ export class Crust {
               const y = cy * CH + ly;
               const colDir = this.columnDir(face, x, y);
               const cosAng = dot(colDir, dir);
-              if (cosAng < cosLim) continue;
+              // Столбец шапки: близко к полюсу, что бы там ни было с расстоянием до dir.
+              const inCap =
+                capActive && Math.acos(Math.min(1, Math.max(-1, colDir.y * poleY))) <= capR;
+              if (cosAng < cosLim && !inCap) continue;
               const ang = Math.acos(Math.min(1, cosAng));
-              // Столбец под диском маски дырок — его чанк обязан быть в changed, даже если
-              // ниже ничего не выбито (мешер построит нетронутую крышку 1−LID_DROP, которую
-              // и покажет дискард под маской).
-              if (ang <= maskR) changed.add(this.chunkKey(face, cx, cy));
+              // Столбец под диском маски дырок (или под полюсной шапкой маски) — его чанк
+              // обязан быть в changed, даже если ниже ничего не выбито (мешер построит
+              // нетронутую крышку 1−LID_DROP, которую и покажет дискард под маской/шапкой).
+              if (ang <= maskR || inCap) changed.add(this.chunkKey(face, cx, cy));
+              if (cosAng < cosLim) continue; // вне диска карва (шапка только помечает — не режет)
               const t = ang / latR;
               if (t > 1.3) continue;
               const jit = 1 + (Crust.jitter(face, x, y, seed) - 0.5) * 0.3;

@@ -92,4 +92,35 @@ describe('Crust.carve', () => {
   it('инвариант держится и для мелкого 1Мт-удара (проверяет фикс cosLim)', () => {
     assertMaskCoveredByChangedChunks(SAHARA, 0.009, 1.5, 7);
   });
+
+  // Полюс внутри диска маски (но НЕ ровно в полюсе — южная Антарктида, 2° от полюса):
+  // HoleMask.markCarve красит не диск, а сферическую шапку радиусом angToPole+maskR вокруг
+  // полюса (см. ревью Task 11, band-ветка в markCarve). Проверяем именно форму шапки —
+  // каждый столбец в её пределах (а не только в пределах обычного диска вокруг dir) обязан
+  // лежать над changed-чанком.
+  it('инвариант держится у полюса: шапка маски (band) покрыта changed-чанками, не только диск вокруг dir', () => {
+    const crust = new Crust();
+    const dir = lonLatToDir(0, deg(-88)); // 2° от южного полюса, не ровно в полюс
+    const radiusRad = 0.046;
+    const res = crust.carve(dir, radiusRad, 5, 42);
+    const changed = new Set(res.changed);
+    const maskR = carveMaskRadius(radiusRad);
+    const capR = deg(2) + maskR; // angToPole(dir) + maskR — точная форма band'а HoleMask
+    let checked = 0;
+    for (let face = 0 as FaceId; face < 6; face++) {
+      for (let y = 0; y < CRUST_FACE_N; y++) {
+        for (let x = 0; x < CRUST_FACE_N; x++) {
+          const colDir = crust.columnDir(face, x, y);
+          const angToSouthPole = Math.acos(Math.min(1, Math.max(-1, -colDir.y)));
+          if (angToSouthPole > capR) continue;
+          checked++;
+          const cx = Math.floor(x / CRUST_CHUNK);
+          const cy = Math.floor(y / CRUST_CHUNK);
+          const key = crust.chunkKey(face, cx, cy);
+          expect(changed.has(key)).toBe(true);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
 });
