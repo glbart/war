@@ -23,10 +23,20 @@ export const COAST_TEX_H = 512;
 // Волновое поле океана (интерактивная рябь/каверна). Разрешение делит COAST для простоты.
 export const WATER_FIELD_W = 1024;
 export const WATER_FIELD_H = 512;
-export const WATER_WAVE_SPEED = 0.25; // c²·dt²/dx² эффективный (стабильно < 0.5 для 4-соседей)
-export const WATER_WAVE_DAMPING = 0.006; // затухание за шаг → поле само возвращается к штилю
-// Импульс удара по воде в поле (по мощности): сила (в скорость) и радиус (доля equirect).
-export const WATER_SPLAT_STRENGTH: Record<number, number> = { 1: 0.6, 10: 1.1, 100: 1.9 };
+// Скорость волн: c²·dt²/dx² эффективный (стабильно < 0.5 для 4-соседей). 0.1 вместо 0.25 —
+// волны от удара расходятся заметно медленнее (читаются глазом как кольца, а не мгновенная рябь).
+export const WATER_WAVE_SPEED = 0.1;
+export const WATER_WAVE_DAMPING = 0.006; // затухание СКОРОСТИ за шаг (рассеивает энергию волн)
+// Затухание ВЫСОТЫ за шаг: без него односторонний импульс в скорость интегрируется в среднюю
+// высоту, которая не спадает → всё поле уезжает от нуля и вырождается (белая пена / провал).
+// Небольшой height-leak тянет поле к нулю (полный «возврат к штилю»). 0.003 вместо 0.02 —
+// кольца волн живут секунды и успевают разойтись от эпицентра, дрейф среднего всё ещё гасится.
+export const WATER_HEIGHT_DAMPING = 0.003;
+// Импульс удара по воде в поле (по мощности): сила (в скорость, бьёт ВНИЗ — каверна) и радиус
+// (доля equirect). Сила выбрана с запасом: каверна вниз всё равно клампится дном (OCEAN_ZBIAS),
+// а видимую картину дают отдача-столб в центре и расходящиеся кольца — им нужна амплитуда.
+// Не выше ~2.6: клампы поля ±4 превращают более сильную каверну в широкое плоское «блюдо».
+export const WATER_SPLAT_STRENGTH: Record<number, number> = { 1: 0.9, 10: 1.6, 100: 2.6 };
 export const WATER_SPLAT_RADIUS: Record<number, number> = { 1: 0.012, 10: 0.02, 100: 0.035 };
 export const GLOBE_LON_SEG = 384;
 export const GLOBE_LAT_SEG = 192;
@@ -57,7 +67,10 @@ export const CRATER_DETAIL_OCTAVES = 3;
 export const CRATER_DETAIL_STRENGTH = 0.7;
 
 // Водная оболочка океана (OceanShell): анимированная сфера чуть выше глобуса.
-export const R_OCEAN = 1.0008; // чуть выше глобуса (r=1) — против z-fighting с ocean-цветом
+// Оболочка приподнята над глобусом так, чтобы амплитуда волн (±~0.00128) не проваливала её ниже
+// поверхности глобуса (r=1) во впадинах — иначе снизу проступает статичная биом-вода.
+export const R_OCEAN = 1.0018;
+export const OCEAN_ZBIAS = 0.0004; // минимальный гарантированный зазор оболочки над глобусом
 export const OCEAN_LON_SEG = 384;
 export const OCEAN_LAT_SEG = 192;
 // Константное направление «солнца» для ручного шейдинга воды (без динамического света).
@@ -82,7 +95,7 @@ export const EJECTA_GRAVITY = 0.6; // «сила тяжести» парабол
 export const DETAIL_NEAR = 2.0; // ближе — полная деталь
 export const DETAIL_FAR = 3.6; // дальше — детали нет (как раньше)
 export const DETAIL_ALBEDO_AMP = 0.16; // амплитуда вариации цвета
-export const DETAIL_NORMAL_STR = 0.5; // сила микрорельефа суши
+export const DETAIL_NORMAL_STR = 0; // [ЭКСПЕРИМЕНТ #2] временно 0 — изолируем detail-нормаль
 export const DETAIL_FREQ = 60.0; // частота detail-шума (высокая — мелкая деталь)
 export const DETAIL_OCTAVES = 3;
 
@@ -93,3 +106,22 @@ export const EARTH_TOPO_URL = 'https://unpkg.com/three-globe@2.31.0/example/img/
 // вместе с фичей материала — планета рисуется биом-картой, а не фото).
 export const TILE_LABELS_URL = (z: number, x: number, y: number): string =>
   `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`;
+
+// ---------- Воксельная кора (спека 2026-07-06-voxel-crust-design.md) ----------
+// Оболочка cube-sphere: 6 граней × N×N столбцов × D слоёв вглубь. Воксель ~1/15 диаметра
+// кратера 100Мт. Чанки CH×CH×D ремешатся по отдельности (Surface Nets).
+export const CRUST_FACE_N = 256; // столбцов по стороне грани
+export const CRUST_DEPTH_LAYERS = 8; // слоёв вглубь
+export const CRUST_CHUNK = 32; // сторона чанка в столбцах (256/32 = 8×8 чанков на грань)
+export const CRUST_VOX_ANG = Math.PI / 2 / CRUST_FACE_N; // угловой размер вокселя у центра грани
+export const CRUST_VOX_H = CRUST_VOX_ANG; // радиальная толщина слоя (≈кубический воксель)
+export const MAGMA_R = 0.945; // радиус магма-сферы под корой (кора: 1 − 8·VOX_H ≈ 0.951)
+// Радиус (рад) и глубина (в слоях) carve по мощности: 100Мт ≈ 15 вокселей в поперечнике.
+export const CRUST_RADIUS_BY_YIELD: Record<number, number> = { 1: 0.009, 10: 0.022, 100: 0.046 };
+export const CRUST_DEPTH_BY_YIELD: Record<number, number> = { 1: 1.5, 10: 3, 100: 5 };
+// Палитра слоёв коры (r,g,b 0..1): порода/базальт/морское дно; грунт красится биомом.
+export const CRUST_LAYER_COLORS = {
+  rock: [0.32, 0.27, 0.23],
+  basalt: [0.16, 0.14, 0.15],
+  seabed: [0.08, 0.17, 0.26],
+} as const;

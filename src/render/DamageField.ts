@@ -24,6 +24,7 @@ import {
   sub,
   vec2,
   smoothstep,
+  oneMinus,
   float,
   clamp,
   texture,
@@ -44,7 +45,9 @@ import {
   CRATER_SCORCH_FRAC,
 } from '../assets/config';
 
-const ANG_BY_YIELD: Record<number, number> = { 1: 0.03, 10: 0.05, 100: 0.09 };
+// Радиусы поля урона по мощности (доля equirect-UV). Уменьшены ~вдвое по фидбэку
+// пользователя («кратеры слишком большие»): гарь 100Мт больше не накрывает пол-материка.
+const ANG_BY_YIELD: Record<number, number> = { 1: 0.015, 10: 0.025, 100: 0.045 };
 
 // Точные типы юниформов (как в ExplosionView): конкретный overload uniform() вместо размытого
 // объединения перегрузок, чтобы .value имел тип Vector2 / number, а не keyof UniformValue.
@@ -79,6 +82,11 @@ export class DamageField {
     };
     this.rt = makeRT();
     this.prevRt = makeRT();
+    // Обнуляем оба RT на старте. На WebGL2 нет гарантии нуль-инициализации текстур RenderTarget:
+    // без этого rt/prevRt содержат мусор (~1), и ПЕРВЫЙ splat через max(prevRt, stamp) сохраняет
+    // этот мусор ВЕЗДЕ, кроме воронки → поле урона ≈1 по всей сфере → crater-микрорельец GlobeView
+    // серит всю планету при любом ударе. (Тот же класс бага, что чинился в WaterField.)
+    this.clear();
 
     this.stampScene = new THREE.Scene();
     // Орто-камера смотрит вдоль -Z; квад лежит в плоскости z=0, камера вынесена на z=1 с запасом
@@ -100,15 +108,18 @@ export class DamageField {
     // dNorm — та же нормировка, что и в чистом craterProfile (src/render/effects/craterProfile.ts):
     // 0 в центре, 1 на краю чаши, >1 снаружи (вал/эжекта). Формулы ниже — его TSL-зеркало.
     const dNorm = d.div(this.uRadius);
-    const depth = smoothstep(float(1), float(0), dNorm); // чаша: 1 в центре → 0 на краю
+    // ВАЖНО: smoothstep на GPU определён только при edge0 < edge1 (иначе поведение вдали не
+    // клампится и после внешнего clamp даёт 1 → damage≈1 ПО ВСЕЙ сфере → серит планету). Поэтому
+    // «убывающие» профили пишем как oneMinus(smoothstep(меньший, больший, …)) — корректный порядок.
+    const depth = oneMinus(smoothstep(float(0), float(1), dNorm)); // чаша: 1 в центре → 0 на краю
     const rimX = dNorm.sub(float(CRATER_RIM_FRAC)).div(float(CRATER_RIM_WIDTH_FRAC));
     const rim = exp(rimX.mul(rimX).negate()); // вал: гаусс за краем чаши
     // Эжекта: кольцо СНАРУЖИ чаши — спад от вала наружу, домноженный на внутренний ramp,
     // обнуляющий её ниже вала (внутри чаши эжекты нет). Форма зеркалит craterProfile.ts.
-    const ejecta = smoothstep(float(CRATER_EJECTA_FRAC), float(CRATER_RIM_FRAC), dNorm).mul(
-      smoothstep(float(1), float(CRATER_RIM_FRAC), dNorm),
-    );
-    const scorch = smoothstep(float(CRATER_SCORCH_FRAC), float(0), dNorm); // широкая гарь
+    const ejecta = oneMinus(
+      smoothstep(float(CRATER_RIM_FRAC), float(CRATER_EJECTA_FRAC), dNorm),
+    ).mul(smoothstep(float(1), float(CRATER_RIM_FRAC), dNorm));
+    const scorch = oneMinus(smoothstep(float(0), float(CRATER_SCORCH_FRAC), dNorm)); // широкая гарь
     const melt = clamp(depth.mul(this.uKind), 0, 1); // только лёд, форма как у чаши
     const stamp = vec4(
       clamp(depth, 0, 1),
@@ -118,10 +129,21 @@ export class DamageField {
     );
     // Поканальный max с предыдущим состоянием поля (см. комментарий вверху файла про
     // WebGL2-несовместимость CustomBlending+MaxEquation) — обычный опаковый вывод.
-    const prevSample = texture(this.prevRt.texture, uv());
+    // V-КОНВЕНЦИЯ RT (оба бэкенда three): texture(rtTex, uv) при uv.y=q возвращает фрагмент,
+    // отрисованный в квад-координате y=1−q — RT-сэмплинг отражён по V относительно координат
+    // записи (на GL это авто-flipY для isRenderTargetTexture в TextureNode.setupUV, на WebGPU —
+    // top-left origin текстур). Поэтому самочтение prevRt здесь идёт через oneMinus(uv().y) —
+    // иначе КАЖДЫЙ следующий splat зеркалил бы весь накопленный урон по широте.
+    const prevSample = texture(this.prevRt.texture, vec2(uv().x, oneMinus(uv().y)));
     const mat = new THREE.MeshBasicNodeMaterial();
     mat.colorNode = max(prevSample, stamp);
     mat.transparent = false;
+    // КРИТИЧНО: NoBlending. У node-материалов opaque-путь (transparent=false + NormalBlending,
+    // см. NodeBuilder.isOpaque → NodeMaterial.setupDiffuseColor) принудительно пишет
+    // diffuseColor.a = 1.0 — то есть КАЖДЫЙ splat заливал бы канал A (вал+эжекта) единицей по
+    // всему фуллскрин-кваду → craterMask≈1 по всей сфере → «серое зерно» на всей планете.
+    // NoBlending выводит isOpaque() из-под условия, альфа штампа доходит до RT как данные.
+    mat.blending = THREE.NoBlending;
 
     this.stampMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
     this.stampMesh.position.set(0.5, 0.5, 0);
@@ -135,6 +157,10 @@ export class DamageField {
   // Впечатывает воронку в поле. kind='ice' поднимает канал оплавления (полынья).
   splat(dir: Vec3, yieldMt: number, kind: 'land' | 'ice'): void {
     const { lon, lat } = dirToLonLat(dir);
+    // V-конвенция: сфера сэмплит поле при uv.y=(lat+π/2)/π, но RT-сэмплинг отражён по V
+    // относительно координат ЗАПИСИ (см. комментарий у prevSample) — потому центр штампа
+    // пишем в v = 1−(lat+π/2)/π = (π/2−lat)/π. Проверено скриншотом приёмки: кратер ложится
+    // ровно под взрыв, а не на зеркальной широте.
     this.uCenter.value.set((lon + Math.PI) / (2 * Math.PI), (Math.PI / 2 - lat) / Math.PI);
     this.uRadius.value = ANG_BY_YIELD[yieldMt] ?? 0.05;
     this.uKind.value = kind === 'ice' ? 1 : 0;

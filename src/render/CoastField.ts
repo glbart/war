@@ -67,6 +67,12 @@ export function buildCoastTexture(
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
+  // Данные построены строка 0 = север (как биом-CanvasTexture). Но DataTexture по умолчанию
+  // flipY=false, а биом-текстура глобуса — CanvasTexture с flipY=true. Без выравнивания маска
+  // океана оказывается вертикально перевёрнута относительно суши → вода рисуется в N/S-зеркале
+  // (вода поверх суши, суша сквозь воду, статичная биом-вода проступает). Ставим flipY=true,
+  // чтобы ориентация совпала с биомом/глобусом.
+  tex.flipY = true;
   tex.needsUpdate = true;
   return tex;
 }

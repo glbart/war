@@ -49,6 +49,10 @@ function logConsole(entry) {
 
 function isBad(entry) {
   const text = entry.text || '';
+  // Сетевые сбои (favicon 404, внешний тайл-сервер подписей границ/городов) — не ошибки
+  // рендера; шейдерные/JS-ошибки приходят с другим source ('javascript'/'console'), их эта
+  // проверка не трогает.
+  if (entry.source === 'network') return false;
   if (BENIGN_PATTERNS.some((re) => re.test(text))) return false;
   if (entry.type === 'exception') return true;
   if (entry.level === 'error') return true;
@@ -250,6 +254,35 @@ async function main() {
     await evalJs('window.__reset()');
     await sleep(500);
     await screenshot('04-after-reset.png');
+
+    // --- Прогрессия: три удара 100Мт в одну точку (воксельная кора копается до магмы) ---
+    console.log('Прогрессия: 3×100Мт в одну точку...');
+    await evalJs('window.__reset()');
+    await sleep(500);
+    await evalJs('window.__lookAt(20, 23)');
+    await evalJs('window.__strike(20, 23, 100)');
+    await sleep(4000);
+    await screenshot('05-crust-hit1.png');
+    await evalJs('window.__strike(20, 23, 100)');
+    await sleep(4000);
+    await screenshot('06-crust-hit2.png');
+    await evalJs('window.__strike(20, 23, 100)');
+    await sleep(4000);
+    await screenshot('07-crust-hit3.png');
+    // скол на силуэте: разворачиваем камеру так, чтобы кратер (20,23) оказался у лимба —
+    // угловое расстояние (20,23)→(100,23) ≈ 74° (при DEFAULT_ZOOM=3.2 видимый геоцентрический
+    // радиус диска θ_h=arccos(1/3.2)≈71.8°, т.е. кратер чуть заходит за горизонт/на сам лимб)
+    await evalJs('window.__lookAt(100, 23)');
+    await sleep(300);
+    await screenshot('08-crust-limb.png');
+
+    // Возвращаем камеру на кратер и ждём затухания всех взрывных эффектов (огненный шар,
+    // кольца ударной волны, свечение), чтобы визуально подтвердить прогрессию воронки —
+    // гранёные стенки (Surface Nets), слои породы/базальта и магму на дне (кора пробита
+    // тремя ударами по 100Мт).
+    await evalJs('window.__lookAt(20, 23)');
+    await sleep(12000);
+    await screenshot('09-crust-settled.png'); // кратер после затухания взрыва — воронка, слои породы, магма на дне (3×100Мт пробивают кору)
 
     writeFileSync(path.join(OUT_DIR, 'console-log.json'), JSON.stringify(consoleLog, null, 2));
     console.log('Консоль-лог сохранён. Всего записей:', consoleLog.length);

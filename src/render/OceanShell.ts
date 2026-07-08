@@ -26,6 +26,7 @@ import {
   normalize,
   abs,
   pow,
+  max,
   clamp,
   mix,
   smoothstep,
@@ -41,6 +42,7 @@ import {
 import type { ThreeCtx } from './Renderer';
 import {
   R_OCEAN,
+  OCEAN_ZBIAS,
   OCEAN_SUN_DIR,
   OCEAN_LON_SEG,
   OCEAN_LAT_SEG,
@@ -151,9 +153,13 @@ export class OceanShell {
         .add(t.mul(1.4)),
     );
     const macro = g1.mul(0.5).add(g2.mul(0.35)).mul(0.0015);
-    const interactive = fieldH.mul(MAX_CRATER_DEPTH).mul(1.5); // каверна/рябь удара
+    const interactive = fieldH.mul(MAX_CRATER_DEPTH).mul(3.0); // каверна/рябь удара (волны выше)
     const disp = macro.add(interactive).mul(coast);
-    mat.positionNode = positionLocal.add(normalLocal.mul(disp));
+    // Не даём оболочке провалиться ниже глобуса: радиус = R_OCEAN + dispSafe ≥ 1 + OCEAN_ZBIAS.
+    // Амбиентные волны (±0.00128) целиком в зазоре (R_OCEAN−1=0.0018); клампится только глубокая
+    // каверна удара — упирается в «дно» над глобусом, а не пробивает насквозь.
+    const dispSafe = max(disp, float(OCEAN_ZBIAS - (R_OCEAN - 1)));
+    mat.positionNode = positionLocal.add(normalLocal.mul(dispSafe));
 
     // --- Фрагмент (мир-пространство, как атмосфера: без света, вручную) ---
     const V = normalize(cameraPosition.sub(positionWorld)); // взгляд — мировой кадр
@@ -207,7 +213,10 @@ export class OceanShell {
     const shoreFoam = oneMinus(coast)
       .mul(smoothstep(0.2, 0.6, shoreNoise))
       .mul(FOAM * 0.8);
-    const strikeFoam = smoothstep(0.25, 0.7, fieldH);
+    // Пена удара — только на ПОЛОЖИТЕЛЬНЫХ гребнях (отдача-столб и кольца); каверна (fieldH<0)
+    // пены не даёт — иначе весь диск удара заливался бы «белым кругом». Порог низкий, чтобы
+    // расходящиеся кольца читались пеной, а не только самый пик отдачи.
+    const strikeFoam = smoothstep(0.12, 0.5, fieldH);
     const foam = clamp(crest.add(shoreFoam).add(strikeFoam), 0, 1);
     col = mix(col, vec3(0.85, 0.94, 1.0), foam.mul(0.75));
 
