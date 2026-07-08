@@ -1,0 +1,46 @@
+# Деплой на GitHub Pages: на каждый пуш в master собираем статику (tsc + vite build)
+# и публикуем dist/ через официальный Pages-пайплайн (без ветки gh-pages).
+# База путей: сайт живёт в поддиректории username.github.io/<репо>/ — передаём её
+# в сборку через DEPLOY_BASE (см. vite.config.ts); имя репозитория берём из контекста.
+name: deploy-pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: # ручной запуск из вкладки Actions
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build (база = /<репо>/)
+        run: DEPLOY_BASE="/${GITHUB_REPOSITORY#*/}/" npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
