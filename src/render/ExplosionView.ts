@@ -181,6 +181,19 @@ export class ExplosionView {
     slot.uWaveOp.value = 0.9;
   }
 
+  // Немедленно гасит все активные взрывы (planetReset): огненные шары и волны не должны
+  // переживать восстановление планеты.
+  clear(): void {
+    for (const slot of this.slots) {
+      if (!slot.active) continue;
+      slot.active = false;
+      slot.fireball.scale.setScalar(0);
+      slot.uFireOp.value = 0;
+      slot.wave.scale.setScalar(0);
+      slot.uWaveOp.value = 0;
+    }
+  }
+
   // Гонит таймлайн активных взрывов (порт ~904-914). Всё через юниформы/трансформы — ни
   // одной аллокации и ни одной перекомпиляции шейдера.
   update(dt: number): void {

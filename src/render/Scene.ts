@@ -115,6 +115,13 @@ export class Scene {
         break;
       case 'planetReset':
         this.missileView.clear();
+        // Дым/огонь гриба, выброс грунта, огненные шары/волны и водные всплески не должны
+        // переживать восстановление планеты (фикс: дым висел после reset).
+        this.explosionView.clear();
+        this.waterBurstView.clear();
+        this.particlePool.clear();
+        this.ejectaView.clear();
+        this.rig.shake = 0; // и тряска гаснет сразу (фикс: тряска жила после reset при агонии)
         this.decalView.clear();
         this.damageField.clear();
         this.waterField.clear();
