@@ -25,12 +25,19 @@ import {
   asin,
   PI,
   cross,
+  uniform,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
 import { Crust, MAT_SOIL, MAT_BASALT, MAT_WATER } from '../crust/Crust';
 import { buildChunkGeo } from '../crust/chunkGeometry';
 import type { FaceId } from '../crust/cubesphere';
 import { CRUST_LAYER_COLORS, CRATER_MATERIAL_COLORS } from '../assets/config';
+import { crackEmissiveNode, setEmissiveNode } from './effects/cracks';
+
+// Точный тип float-юниформа (как в MagmaCore): .value — number, а не объединение перегрузок.
+function makeFloatUniform(v: number) {
+  return uniform(v);
+}
 
 // Узловой тип для промежуточной vec3-переменной (как в OceanShell/GlobeView): вытаскиваем
 // Node<"vec3"> из сигнатуры cross (единственная перегрузка → ReturnType точен) — vec3(...)
@@ -42,6 +49,7 @@ export class CrustView {
   private readonly meshes = new Map<string, THREE.Mesh>();
   private readonly group: THREE.Group;
   private readonly material: THREE.MeshPhongNodeMaterial;
+  private readonly uTime = makeFloatUniform(0); // часы пульса трещин (толкает Scene.update)
 
   constructor(
     private readonly ctx: ThreeCtx,
@@ -85,7 +93,15 @@ export class CrustView {
     const cm = CRATER_MATERIAL_COLORS;
     col = mix(col, vec3(cm.scorch[0], cm.scorch[1], cm.scorch[2]), clamp(dmg.g.mul(0.8), 0, 1));
     mat.colorNode = col;
+    // Трещины и на воксельных чанках (крышки/склоны) — без шва с глобусом (общий узел,
+    // рисунок зависит только от направления фрагмента и поля урона).
+    setEmissiveNode(mat, crackEmissiveNode(dmg.r, p, this.uTime));
     this.material = mat;
+  }
+
+  // Часы шейдера трещин (пульс) — толкает Scene.update раз за кадр.
+  setTime(t: number): void {
+    this.uTime.value = t;
   }
 
   // Ремешит перечисленные чанки (ключ 'f:cx:cy'): удаляет старый меш, строит новый. Маску дырок

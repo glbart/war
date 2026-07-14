@@ -20,6 +20,8 @@ import {
   smoothstep,
   texture,
   uv,
+  uniform,
+  positionLocal,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
 import {
@@ -29,6 +31,12 @@ import {
   CRATER_MATERIAL_COLORS,
 } from '../assets/config';
 import { buildBiomeCanvas } from './MaterialGlobe';
+import { crackEmissiveNode, setEmissiveNode } from './effects/cracks';
+
+// Точный тип float-юниформа (как в MagmaCore): .value — number, а не объединение перегрузок.
+function makeFloatUniform(v: number) {
+  return uniform(v);
+}
 
 const ATMOSPHERE_RADIUS = 1.06;
 const ATMOSPHERE_FRESNEL_POWER = 4.5;
@@ -41,6 +49,7 @@ export class GlobeView {
   readonly biomeTexture: THREE.Texture; // отдаётся наружу — используется CrustView для окраски грунта
 
   private readonly readyPromise: Promise<void>;
+  private readonly uTime = makeFloatUniform(0); // часы пульса трещин (толкает Scene.update)
 
   constructor(ctx: ThreeCtx, damageTex: THREE.Texture, holeTex: THREE.Texture) {
     const { THREE } = ctx;
@@ -74,6 +83,12 @@ export class GlobeView {
     const openWater = smoothstep(0.45, 0.75, dmg.b);
     const withIceRim = mix(scorched, vec3(0.7, 0.78, 0.85), iceRim);
     earthMaterial.colorNode = mix(withIceRim, vec3(0.05, 0.12, 0.2), openWater);
+
+    // Светящиеся трещины глубоких очагов (R поля урона) — эмиссивно, поверх гари (этап 3).
+    setEmissiveNode(
+      earthMaterial,
+      crackEmissiveNode(dmg.r, normalize(positionLocal), this.uTime),
+    );
 
     // Дырки коры: там, где HoleMask=1, фрагмент глобуса отбрасывается (регион рисует CrustView).
     // alphaTest-путь node-материалов делает discard без transparent-прохода.
@@ -127,6 +142,11 @@ export class GlobeView {
       earthMaterial.bumpScale = 0.6;
       earthMaterial.needsUpdate = true;
     });
+  }
+
+  // Часы шейдера трещин (пульс) — толкает Scene.update раз за кадр.
+  setTime(t: number): void {
+    this.uTime.value = t;
   }
 
   // Резолвится сразу же (биом-текстура и узлы материала готовы синхронно в конструкторе);
