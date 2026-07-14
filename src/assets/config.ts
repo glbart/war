@@ -146,3 +146,15 @@ export const DEBRIS_SIZE_MIN = 0.006; // ~1 воксель коры (CRUST_VOX_H
 export const DEBRIS_SIZE_MAX = 0.016;
 export const DEBRIS_PUFF_MAX = 40; // лимит пыхов приземления на удар (бережём слоты EjectaView)
 export const DEBRIS_SOIL_COLOR = [0.4, 0.31, 0.22] as const; // глыбы грунта (порода/базальт — CRUST_LAYER_COLORS)
+
+// ---------- Трещины и целостность (спека 2026-07-14-cracks-integrity-design.md) ----------
+// «Бюджет гибели» коры: выбитых вокселей, при которых integrity()=0 (порог раскола, этап 4).
+// Честная доля всей коры (~912k вокселей суши) недостижима игрой — бюджет геймплейный:
+// ~34 удара по 100 Мт (≈590 вокселей каждый).
+export const CRUST_DOOM_VOXELS = 20_000;
+export const CRACK_EXTENT_FRAC = 2.4; // докуда стелются трещины (доли радиуса штампа поля)
+export const CRACK_FREQ = 26; // частота рисунка жил (ridged fbm по направлению фрагмента)
+export const CRACK_EDGE0 = 0.86; // порог начала жилы (ширина линий: ближе к EDGE1 — тоньше)
+export const CRACK_EDGE1 = 0.97;
+export const CRACK_COLOR = [1.0, 0.42, 0.1] as const; // магма (согласовано с MagmaCore)
+export const CRACK_INTENSITY = 1.6; // множитель эмиссии (перекрывает гарь-затемнение)

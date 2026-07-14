@@ -13,6 +13,7 @@ import {
   CRUST_CHUNK,
   CRUST_VOX_ANG,
   CRUST_VOX_H,
+  CRUST_DOOM_VOXELS,
 } from '../assets/config';
 
 export const MAT_EMPTY = 0;
@@ -30,6 +31,13 @@ export function pristineMaterial(d: number): number {
   return d <= 1 ? MAT_SOIL : d <= 4 ? MAT_ROCK : MAT_BASALT;
 }
 
+// Сила трещинного очага по глубине пробития carve: базальт (слой 5) едва трещит (~⅓),
+// пробитие до магмы (слой 7) — максимум. До базальта очага нет.
+export function crackStrengthForDepth(deepestLayer: number): number {
+  if (deepestLayer < 5) return 0;
+  return Math.min(1, (deepestLayer - 4) / (CRUST_DEPTH_LAYERS - 5));
+}
+
 // Радиус диска маски дырок (HoleMask) для carve данного радиуса: запас на джиттер края
 // (t ≤ √1.15 ≈ ×1.073 от radiusRad) и полувоксельное сглаживание Surface Nets.
 // ЕДИНСТВЕННЫЙ источник этой формулы: тот же радиус использует carve() для пометки чанков
@@ -42,6 +50,7 @@ export interface CarveResult {
   changed: string[]; // ключи чанков на ремеш (задетые + боковые соседи)
   removed: number; // сколько вокселей выбито этим ударом
   removedByMat: { soil: number; rock: number; basalt: number }; // разбивка removed по материалам
+  deepestLayer: number; // самый глубокий слой, выбитый ЭТИМ ударом; −1 если ничего
 }
 
 export class Crust {
@@ -105,6 +114,12 @@ export class Crust {
     this.removedVoxels = 0;
   }
 
+  // Целостность коры [0..1]: 1 − выбитое/бюджет гибели (CRUST_DOOM_VOXELS — геймплейный
+  // порог этапа 4 «раскол», не честная доля всей коры). Кламп снизу — не уходит в минус.
+  integrity(): number {
+    return Math.min(1, Math.max(0, 1 - this.removedVoxels / CRUST_DOOM_VOXELS));
+  }
+
   // Кол-во материализованных чанков — для тестов ленивости/перф-санити.
   get materializedChunks(): number {
     return this.chunks.size;
@@ -132,6 +147,7 @@ export class Crust {
     const changed = new Set<string>();
     let removed = 0;
     const removedByMat = { soil: 0, rock: 0, basalt: 0 };
+    let deepestLayer = -1;
     const latR = Math.max(radiusRad, CRUST_VOX_ANG * 0.75); // не уже одного вокселя
     const radR = Math.max(depthVox, 1) * CRUST_VOX_H;
     // Радиус диска маски дырок (HoleMask.markCarve) для этого удара — единственный источник
@@ -213,6 +229,7 @@ export class Crust {
                 else removedByMat.basalt++;
                 removed++;
                 removedInColumn++;
+                if (d > deepestLayer) deepestLayer = d;
               }
               if (removedInColumn > 0) {
                 changed.add(this.chunkKey(face, cx, cy));
@@ -226,6 +243,6 @@ export class Crust {
         }
     }
     this.removedVoxels += removed;
-    return { changed: [...changed].sort(), removed, removedByMat };
+    return { changed: [...changed].sort(), removed, removedByMat, deepestLayer };
   }
 }
