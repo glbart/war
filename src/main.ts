@@ -9,6 +9,7 @@ import { CameraRig } from './input/CameraRig';
 import { PointerController } from './input/PointerController';
 import { LocalSimHost } from './sim/SimHost';
 import { Hud } from './ui/Hud';
+import { initVersionInfo } from './ui/VersionInfo';
 import { ensureAudio } from './render/effects/sound';
 
 const TILE_UPDATE_INTERVAL = 0.3; // секунд между реконсиляциями тайлов — дороже кадрового рендера
@@ -58,6 +59,7 @@ async function boot() {
   // накапливаются до drainEvents() — сливаем их раз за кадр рендера и раздаём Scene и Hud.
   const host = new LocalSimHost(SIM_SEED);
   const hud = new Hud(host);
+  initVersionInfo(); // бейдж версии + окно «Что нового» при первом открытии новой версии
 
   // Dev-инструменты headless-приёмки (__strike/__reset/__lookAt на window) — только
   // в dev-сборке; динамический импорт под import.meta.env.DEV гарантирует, что Vite
