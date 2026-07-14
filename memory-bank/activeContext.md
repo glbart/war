@@ -4,7 +4,28 @@ _Обновлено: 2026-07-14_
 
 ## Чем занимаемся прямо сейчас
 
-**Обломки-глыбы (этап 2 реальной разрушаемости) реализованы** (ветка `feat/debris`, спека
+**Трещины и целостность (этап 3 реальной разрушаемости) реализованы** (ветка
+`feat/cracks-integrity`, спека `docs/superpowers/specs/2026-07-14-cracks-integrity-design.md`,
+план `docs/superpowers/plans/2026-07-14-cracks-integrity-implementation.md`). Кратко:
+- `Crust`: `CarveResult.deepestLayer` (самый глубокий выбитый слой за удар), `integrity()`
+  = 1 − removedVoxels/CRUST_DOOM_VOXELS (бюджет 20k ≈ 34 удара 100Мт; 0 — порог этапа 4),
+  `crackStrengthForDepth` (0 до базальта, слой 7 → 1).
+- **R-канал DamageField переназначен**: был «глубина чаши» (никем не читался после демонтажа
+  displacement) → теперь очаги трещин (uCrack × спад от ямы до CRACK_EXTENT_FRAC=2.4 радиусов).
+- `render/effects/cracks.ts`: общий эмиссивный TSL-узел — жилы ridged-fbm по направлению
+  фрагмента (без мыла на зуме), пульс sin(uTime), цвет магмы; подключён в GlobeView **и**
+  CrustView (без шва на границе дискарда). Там же `setEmissiveNode` — типобезопасный сеттер
+  (в @types/three emissiveNode объявлен только у Standard, в рантайме есть у всех NodeMaterial).
+- HUD: «Целостность коры: N%» (жёлтая <70%, красная <35%), опрос раз за кадр из main.ts,
+  DOM — только при смене процента.
+- Визуальную приёмку смотрит юзер сам.
+
+Следующий фокус — **этап 4 (финал дорожной карты)**: раскол планеты при integrity()=0 —
+сценарная развязка.
+
+## Предыдущий этап (для контекста)
+
+**Обломки-глыбы (этап 2 реальной разрушаемости) реализованы и влиты** (ветка `feat/debris`, спека
 `docs/superpowers/specs/2026-07-14-debris-design.md`, план
 `docs/superpowers/plans/2026-07-14-debris-implementation.md`). Кратко:
 - `Crust.carve` возвращает `removedByMat` (грунт/порода/базальт) — из неё число и цвета глыб.
