@@ -4,6 +4,15 @@ _Обновлено: 2026-07-14_
 
 ## Чем занимаемся прямо сейчас
 
+**Баллистические МБР и залп (2026-07-14) реализованы** (ветка `feat/ballistic-missiles`,
+спека `docs/superpowers/specs/2026-07-14-ballistic-missiles-design.md`): ракеты залпа летят
+по баллистической дуге (slerp+апогей от дальности, `sim/ballistics.ts`) из случайных точек
+суши по случайным живым городам (кнопка «☢ Залп МБР», команда `salvo`, sim-детерминизм);
+ручной клик остался «ударом из космоса». Событие missileLaunched несёт from/flightTime.
+Детали — progress.md.
+
+## Предыдущее (этап 4 разрушаемости)
+
 **Раскол планеты (этап 4) реализован — дорожная карта «реальной разрушаемости» ЗАКРЫТА**
 (ветка `feat/planet-shatter`, спека `docs/superpowers/specs/2026-07-14-planet-shatter-design.md`,
 план `docs/superpowers/plans/2026-07-14-planet-shatter-implementation.md`). Кратко:
