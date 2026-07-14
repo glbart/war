@@ -14,6 +14,7 @@ import { ExplosionView } from './ExplosionView';
 import { WaterBurstView } from './WaterBurstView';
 import { ParticlePool } from './effects/particles';
 import { EjectaView } from './EjectaView';
+import { DebrisView } from './DebrisView';
 import { DecalView } from './DecalView';
 import type { DamageField } from './DamageField';
 import { WaterField } from './WaterField';
@@ -29,6 +30,7 @@ import {
   WATER_SPLAT_RADIUS,
   CRUST_RADIUS_BY_YIELD,
   CRUST_DEPTH_BY_YIELD,
+  DEBRIS_PUFF_MAX,
 } from '../assets/config';
 
 // Порт shake = Math.max(shake, 0.02 * ys), ys = {1:0.6, 10:1.0, 100:1.7}[yieldMt]
@@ -42,6 +44,7 @@ export class Scene {
   private readonly waterBurstView: WaterBurstView;
   private readonly particlePool: ParticlePool;
   private readonly ejectaView: EjectaView;
+  private readonly debrisView: DebrisView;
   private readonly decalView: DecalView;
   private readonly waterField: WaterField;
   private readonly oceanShell: OceanShell;
@@ -67,6 +70,7 @@ export class Scene {
     this.waterBurstView = new WaterBurstView(ctx, globe.spinGroup);
     this.particlePool = new ParticlePool(ctx, globe.spinGroup);
     this.ejectaView = new EjectaView(ctx, globe.spinGroup);
+    this.debrisView = new DebrisView(ctx, globe.spinGroup);
     this.decalView = new DecalView(ctx, globe);
     // Интерактивная вода: поле волн + маска берега + анимированная оболочка над глобусом.
     this.waterField = new WaterField(ctx);
@@ -107,6 +111,7 @@ export class Scene {
         this.crust.reset();
         this.crustView.clear();
         this.holeMask.clear();
+        this.debrisView.clear();
         break;
       default:
         break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
@@ -145,6 +150,15 @@ export class Scene {
       this.crustView.update(carved.changed);
       // Дискард глобуса — по ДИСКУ реального карва (не по AABB чанка): см. HoleMask.markCarve
       this.holeMask.markCarve(dir, CRUST_RADIUS_BY_YIELD[yieldMt] ?? 0.02);
+      // Глыбы выбитой породы: разлёт + пополнение орбитального кольца (этап 2, спека
+      // 2026-07-14). Приземления баллистических глыб — отложенные пыхи пыли (лимит
+      // DEBRIS_PUFF_MAX бережёт кольцевой буфер EjectaView от вытеснения частиц гриба).
+      const landings = this.debrisView.emit(dir, yieldMt, seed, this.clock, carved.removedByMat);
+      const puffs = Math.min(landings.length, DEBRIS_PUFF_MAX);
+      for (let i = 0; i < puffs; i++) {
+        const l = landings[i];
+        if (l) this.ejectaView.emitPuff(l.dir, l.at, seed + i * 7 + 1);
+      }
     }
     playBoom(yieldMt);
   }
@@ -175,6 +189,7 @@ export class Scene {
     this.waterBurstView.update(dt);
     this.particlePool.setTime(this.clock);
     this.ejectaView.setTime(this.clock);
+    this.debrisView.setTime(this.clock);
     this.decalView.update(dt);
     this.magma.setTime(this.clock);
   }

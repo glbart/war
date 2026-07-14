@@ -125,3 +125,24 @@ export const CRUST_LAYER_COLORS = {
   basalt: [0.16, 0.14, 0.15],
   seabed: [0.08, 0.17, 0.26],
 } as const;
+
+// ---------- Обломки-глыбы (спека 2026-07-14-debris-design.md) ----------
+// Слоты инстанс-буфера DebrisView двумя сегментами: орбитальные живут вечно (кольцо мусора,
+// при переполнении вытесняется самая старая), баллистические переиспользуются по кольцу.
+export const DEBRIS_ORBIT_SLOTS = 1536;
+export const DEBRIS_BALLISTIC_SLOTS = 1024;
+// Число глыб на удар: пропорция от выбитых вокселей с клампом (100Мт ≈ 590 вокселей → ~180).
+export const DEBRIS_PER_VOXEL = 1 / 3;
+export const DEBRIS_MIN = 8;
+export const DEBRIS_MAX = 180;
+export const DEBRIS_ORBIT_FRAC = 0.3; // доля глыб, уходящих на орбиту
+export const DEBRIS_SPEED_BY_YIELD: Record<number, number> = { 1: 0.14, 10: 0.22, 100: 0.34 };
+export const DEBRIS_ORBIT_R_MIN = 1.25; // орбитальный радиус кольца (радиус планеты = 1)
+export const DEBRIS_ORBIT_R_MAX = 1.55;
+export const DEBRIS_ASCENT_T = 6; // сек спирального взлёта с поверхности на орбиту
+export const DEBRIS_OMEGA_MIN = 0.25; // рад/с — скорость кружения по орбите
+export const DEBRIS_OMEGA_MAX = 0.6;
+export const DEBRIS_SIZE_MIN = 0.006; // ~1 воксель коры (CRUST_VOX_H ≈ 0.0061)
+export const DEBRIS_SIZE_MAX = 0.016;
+export const DEBRIS_PUFF_MAX = 40; // лимит пыхов приземления на удар (бережём слоты EjectaView)
+export const DEBRIS_SOIL_COLOR = [0.4, 0.31, 0.22] as const; // глыбы грунта (порода/базальт — CRUST_LAYER_COLORS)

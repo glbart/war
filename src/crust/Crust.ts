@@ -41,6 +41,7 @@ export function carveMaskRadius(radiusRad: number): number {
 export interface CarveResult {
   changed: string[]; // ключи чанков на ремеш (задетые + боковые соседи)
   removed: number; // сколько вокселей выбито этим ударом
+  removedByMat: { soil: number; rock: number; basalt: number }; // разбивка removed по материалам
 }
 
 export class Crust {
@@ -130,6 +131,7 @@ export class Crust {
 
     const changed = new Set<string>();
     let removed = 0;
+    const removedByMat = { soil: 0, rock: 0, basalt: 0 };
     const latR = Math.max(radiusRad, CRUST_VOX_ANG * 0.75); // не уже одного вокселя
     const radR = Math.max(depthVox, 1) * CRUST_VOX_H;
     // Радиус диска маски дырок (HoleMask.markCarve) для этого удара — единственный источник
@@ -206,6 +208,9 @@ export class Crust {
                 // Материализуем чанк ТОЛЬКО когда реально есть что стереть.
                 chunk ??= this.ensureChunk(face, cx, cy);
                 chunk[idx] = MAT_EMPTY;
+                if (m === MAT_SOIL) removedByMat.soil++;
+                else if (m === MAT_ROCK) removedByMat.rock++;
+                else removedByMat.basalt++;
                 removed++;
                 removedInColumn++;
               }
@@ -221,6 +226,6 @@ export class Crust {
         }
     }
     this.removedVoxels += removed;
-    return { changed: [...changed].sort(), removed };
+    return { changed: [...changed].sort(), removed, removedByMat };
   }
 }

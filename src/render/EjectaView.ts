@@ -229,6 +229,35 @@ export class EjectaView {
     this.flush();
   }
 
+  // Маленький пых пыли в точке dir в момент spawn (абсолютное время часов; МОЖЕТ быть в
+  // будущем — частица невидима, пока uTime < spawn, см. fadeIn/alpha в buildMaterial).
+  // Используется для приземлений глыб DebrisView: все пыхи пишутся сразу в момент взрыва.
+  emitPuff(dir: Vec3, spawn: number, seed: number): void {
+    let s = seed | 0 || 1;
+    const rnd = (): number => (s = (s * 16807) % 2147483647) / 2147483647;
+    const TWO_PI = Math.PI * 2;
+    for (let i = 0; i < 4; i++) {
+      const angle = rnd() * TWO_PI;
+      const v0 = 0.02 + rnd() * 0.03;
+      const rSpeed = v0 * (0.5 + rnd());
+      const life = (2 * v0) / EJECTA_GRAVITY;
+      this.writeParticle(
+        spawn,
+        life,
+        Math.min(0.1, life * 0.3),
+        angle,
+        v0,
+        rSpeed,
+        0,
+        0.008 + rnd() * 0.008,
+        dir.x,
+        dir.y,
+        dir.z,
+      );
+    }
+    this.flush();
+  }
+
   // Заливает изменённые атрибуты на GPU одним махом (только если что-то писали).
   private flush(): void {
     if (!this.dirty) return;
