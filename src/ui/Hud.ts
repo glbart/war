@@ -8,7 +8,7 @@ import './styles.css';
 import type { SimHost } from '../sim/SimHost';
 import type { SimEvent } from '../sim/events';
 
-const DEFAULT_YIELD = 10;
+const DEFAULT_YIELD = 100;
 const FEED_MAX_ENTRIES = 5;
 
 // Формат числа жертв: >=1 млн — "N,N млн" (запятая вместо точки — как в эталоне),
@@ -56,8 +56,8 @@ export class Hud {
       <div id="feed"></div>
       <div class="row">
         <button data-yield="1">1 Мт</button>
-        <button data-yield="10" class="active">10 Мт</button>
-        <button data-yield="100">100 Мт</button>
+        <button data-yield="10">10 Мт</button>
+        <button data-yield="100" class="active">100 Мт</button>
       </div>
       <button id="salvo" style="width: 100%; margin-bottom: 8px">☢ Залп МБР</button>
       <button id="reset">Восстановить планету</button>

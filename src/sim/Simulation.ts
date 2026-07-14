@@ -48,7 +48,8 @@ export class Simulation {
   private cities: City[];
   private nextId = 1;
   private labelsEnabled = true;
-  private currentYield = 10;
+  // 100 по умолчанию — синхронно с DEFAULT_YIELD/активной кнопкой Hud (решение юзера 2026-07-14).
+  private currentYield = 100;
 
   private bombs = 0;
   private megatons = 0;
