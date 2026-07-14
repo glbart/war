@@ -123,4 +123,22 @@ describe('Crust.carve', () => {
     }
     expect(checked).toBeGreaterThan(0);
   });
+
+  it('removedByMat раскладывает выбитое по материалам и суммируется в removed', () => {
+    const crust = new Crust();
+    const res = crust.carve(SAHARA, 0.046, 5, 42);
+    const { soil, rock, basalt } = res.removedByMat;
+    expect(soil + rock + basalt).toBe(res.removed);
+    // глубокий удар (5 слоёв) задевает и грунт (слои 0-1), и породу (2-4)
+    expect(soil).toBeGreaterThan(0);
+    expect(rock).toBeGreaterThan(0);
+    // детерминизм разбивки
+    const again = new Crust().carve(SAHARA, 0.046, 5, 42);
+    expect(again.removedByMat).toEqual(res.removedByMat);
+  });
+
+  it('removedByMat нулевой при ударе по океану', () => {
+    const res = new Crust().carve(PACIFIC, 0.046, 5, 42);
+    expect(res.removedByMat).toEqual({ soil: 0, rock: 0, basalt: 0 });
+  });
 });
