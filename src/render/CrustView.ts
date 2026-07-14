@@ -50,6 +50,7 @@ export class CrustView {
   private readonly group: THREE.Group;
   private readonly material: THREE.MeshPhongNodeMaterial;
   private readonly uTime = makeFloatUniform(0); // часы пульса трещин (толкает Scene.update)
+  private readonly uCrackBoost = makeFloatUniform(0); // глобальный буст трещин (агония раскола)
 
   constructor(
     private readonly ctx: ThreeCtx,
@@ -95,13 +96,23 @@ export class CrustView {
     mat.colorNode = col;
     // Трещины и на воксельных чанках (крышки/склоны) — без шва с глобусом (общий узел,
     // рисунок зависит только от направления фрагмента и поля урона).
-    setEmissiveNode(mat, crackEmissiveNode(dmg.r, p, this.uTime));
+    setEmissiveNode(mat, crackEmissiveNode(dmg.r, p, this.uTime, this.uCrackBoost));
     this.material = mat;
   }
 
   // Часы шейдера трещин (пульс) — толкает Scene.update раз за кадр.
   setTime(t: number): void {
     this.uTime.value = t;
+  }
+
+  // Глобальный буст трещин (агония раскола, этап 4) — гонит Scene.update.
+  setCrackBoost(v: number): void {
+    this.uCrackBoost.value = v;
+  }
+
+  // Раскол: воксельные чанки скрываются вместе с планетой (магма-ядро остаётся).
+  setVisible(v: boolean): void {
+    this.group.visible = v;
   }
 
   // Ремешит перечисленные чанки (ключ 'f:cx:cy'): удаляет старый меш, строит новый. Маску дырок
