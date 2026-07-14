@@ -193,3 +193,11 @@ export const SHATTER_MOLTEN_SIZE_MIN = 0.02;
 export const SHATTER_MOLTEN_SIZE_MAX = 0.1;
 export const SHATTER_COOL_TAU = 8; // сек — константа exp-остывания капель (бело-жёлтое → тьма)
 export const SHATTER_COOL_T = 30; // сек — полное остывание срезов кусков-плит
+
+// ---------- Баллистические МБР (спека 2026-07-14-ballistic-missiles-design.md) ----------
+export const SALVO_COUNT = 6; // ракет в залпе (кнопка HUD)
+export const BALLISTIC_APEX_MIN = 0.12; // апогей дуги (радиусов планеты) на нулевой дальности
+export const BALLISTIC_APEX_SCALE = 0.5; // прибавка апогея: apex = MIN + SCALE·(угол/π)
+export const BALLISTIC_TIME_MIN = 3; // сек полёта на нулевой дальности
+export const BALLISTIC_TIME_SCALE = 5; // прибавка: T = MIN + SCALE·(угол/π)
+export const BALLISTIC_EASE_POW = 1.6; // e = k^POW — медленный буст, быстрый вход в атмосферу
