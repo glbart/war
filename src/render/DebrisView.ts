@@ -188,7 +188,10 @@ export class DebrisView {
     // Орбита: θ=ω·tau, r: 1 → orbitR за DEBRIS_ASCENT_T (зеркало debrisMath.orbitalPos).
     const theta = omega.mul(tau);
     const rr = mix(float(1), orbitR, smoothstep(float(0), float(DEBRIS_ASCENT_T), tau));
-    const posOrb = n.mul(cos(theta)).add(tangent.mul(sin(theta))).mul(rr);
+    const posOrb = n
+      .mul(cos(theta))
+      .add(tangent.mul(sin(theta)))
+      .mul(rr);
 
     const center = select(isBall, posBall, posOrb);
 
