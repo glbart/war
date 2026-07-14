@@ -201,3 +201,7 @@ export const BALLISTIC_APEX_SCALE = 0.5; // прибавка апогея: apex 
 export const BALLISTIC_TIME_MIN = 3; // сек полёта на нулевой дальности
 export const BALLISTIC_TIME_SCALE = 5; // прибавка: T = MIN + SCALE·(угол/π)
 export const BALLISTIC_EASE_POW = 1.6; // e = k^POW — медленный буст, быстрый вход в атмосферу
+// След МБР (ревизия спеки §5): дуга пройденной траектории, тает после детонации.
+export const TRAIL_SEGMENTS = 96; // вершин дуги следа − 1
+export const TRAIL_FADE_T = 5; // сек затухания следа после детонации
+export const TRAIL_COLOR = [1.0, 0.72, 0.42] as const; // цвет выхлопа (аддитивный)

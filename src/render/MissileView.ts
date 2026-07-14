@@ -3,16 +3,26 @@
 // конструкторе — после прогрева spawn()/update() не создают геометрию/материалы/векторы,
 // только переиспользуют то, что уже лежит в слотах.
 import type * as THREE from 'three/webgpu';
+import { uniform, attribute, float, vec3, smoothstep, lessThan, select, clamp } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
 import { ballisticPosInto } from '../sim/ballistics';
 import { findFreeSlotIndex } from './SlotPool';
+import { TRAIL_SEGMENTS, TRAIL_FADE_T, TRAIL_COLOR } from '../assets/config';
+
+// Точный тип float-юниформа (как в MagmaCore): .value — number.
+function makeFloatUniform(v: number) {
+  return uniform(v);
+}
+type FloatUniform = ReturnType<typeof makeFloatUniform>;
 
 // 16, а не 8: при flightTime=2.6с и отсутствии дебаунса ввода/лимита боеголовок в симуляции
 // быстрым кликаньем реально одновременно поднять больше 8 ракет. Запас вместимости —
 // дешёвый способ сделать исчерпание пула практически недостижимым при обычной игре, оставляя
 // graceful no-op (см. spawn()) как страховку на случай экстремального спама.
-const POOL_SIZE = 16;
+// 24 (было 16): слот теперь занят и ПОСЛЕ детонации баллистической ракеты — пока тает её
+// след (TRAIL_FADE_T) — залп 6 ракет × (полёт до 8с + фейд 5с) держит слоты дольше.
+const POOL_SIZE = 24;
 const START_RADIUS = 2.6;
 const END_RADIUS = 1.0;
 const MODEL_SPIN_SPEED = 1.5; // рад/с вращения корпуса вокруг собственной оси
@@ -29,6 +39,14 @@ interface MissileSlot {
   readonly fromP: Vec3;
   readonly toP: Vec3;
   readonly posP: Vec3;
+  // След МБР (ревизия §5): дуга траектории, заполняется один раз при пуске; в кадре — юниформы.
+  readonly trailLine: THREE.Line;
+  readonly trailPos: THREE.BufferAttribute;
+  readonly uHead: FloatUniform; // прогресс полёта — видимая часть дуги (позади ракеты)
+  readonly uFade: FloatUniform; // затухание следа после детонации 1→0
+  hasTrail: boolean;
+  fading: boolean; // ракета отлетела, слот занят тающим следом
+  fadeT: number;
   ballistic: boolean; // false — прежний «удар из космоса» (радиальный спуск)
   flightTime: number; // сек; приходит из события missileLaunched (sim авторитетен)
   active: boolean;
@@ -55,6 +73,7 @@ export class MissileView {
     const { model, flame } = this.buildMissileModel();
     group.add(model);
     this.spinGroup.add(group);
+    const { trailLine, trailPos, uHead, uFade } = this.buildTrail();
     return {
       group,
       model,
@@ -64,6 +83,13 @@ export class MissileView {
       fromP: { x: 0, y: 0, z: 0 },
       toP: { x: 0, y: 0, z: 0 },
       posP: { x: 0, y: 0, z: 0 },
+      trailLine,
+      trailPos,
+      uHead,
+      uFade,
+      hasTrail: false,
+      fading: false,
+      fadeT: 0,
       ballistic: false,
       flightTime: 2.6,
       active: false,
@@ -71,6 +97,44 @@ export class MissileView {
       yieldMt: 0,
       t: 0,
     };
+  }
+
+  // След МБР: линия из TRAIL_SEGMENTS+1 вершин с атрибутом aArc (0..1 вдоль дуги). Видна часть
+  // позади ракеты (aArc < uHead), ярче у головы; после детонации весь след гасится uFade.
+  // Позиции заполняются один раз при spawn — в кадре меняются только юниформы.
+  private buildTrail(): {
+    trailLine: THREE.Line;
+    trailPos: THREE.BufferAttribute;
+    uHead: FloatUniform;
+    uFade: FloatUniform;
+  } {
+    const { THREE } = this.ctx;
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array((TRAIL_SEGMENTS + 1) * 3);
+    const arc = new Float32Array(TRAIL_SEGMENTS + 1);
+    for (let i = 0; i <= TRAIL_SEGMENTS; i++) arc[i] = i / TRAIL_SEGMENTS;
+    const trailPos = new THREE.BufferAttribute(positions, 3);
+    trailPos.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('position', trailPos);
+    geo.setAttribute('aArc', new THREE.BufferAttribute(arc, 1));
+
+    const uHead = makeFloatUniform(0);
+    const uFade = makeFloatUniform(1);
+    const a = attribute<'float'>('aArc', 'float');
+    const behind = select(lessThan(a, uHead), float(1), float(0));
+    const bright = float(0.35).add(smoothstep(uHead.sub(0.12), uHead, a).mul(0.65));
+    const mat = new THREE.LineBasicNodeMaterial();
+    mat.colorNode = vec3(TRAIL_COLOR[0], TRAIL_COLOR[1], TRAIL_COLOR[2]);
+    mat.opacityNode = clamp(behind.mul(bright).mul(uFade), 0, 1);
+    mat.transparent = true;
+    mat.blending = THREE.AdditiveBlending;
+    mat.depthWrite = false;
+
+    const trailLine = new THREE.Line(geo, mat);
+    trailLine.visible = false;
+    trailLine.frustumCulled = false;
+    this.spinGroup.add(trailLine);
+    return { trailLine, trailPos, uHead, uFade };
   }
 
   // Порт buildMissileModel() эталона (~643-674): боеголовка, вторая ступень, межступенчатое
@@ -178,6 +242,24 @@ export class MissileView {
     slot.dir.set(dir.x, dir.y, dir.z);
     slot.model.rotation.z = 0;
     slot.flame.scale.y = 1;
+    slot.fading = false;
+    slot.hasTrail = !!from;
+    slot.trailLine.visible = false;
+
+    if (from) {
+      // Заполняем дугу следа ОДИН РАЗ (позиции всей траектории); в полёте меняется лишь uHead.
+      const arr = slot.trailPos.array as Float32Array;
+      for (let i = 0; i <= TRAIL_SEGMENTS; i++) {
+        ballisticPosInto(from, dir, i / TRAIL_SEGMENTS, slot.posP);
+        arr[i * 3] = slot.posP.x;
+        arr[i * 3 + 1] = slot.posP.y;
+        arr[i * 3 + 2] = slot.posP.z;
+      }
+      slot.trailPos.needsUpdate = true;
+      slot.uHead.value = 0;
+      slot.uFade.value = 1;
+      slot.trailLine.visible = true;
+    }
 
     if (from) {
       slot.fromP.x = from.x;
@@ -204,9 +286,31 @@ export class MissileView {
   despawn(id: number): void {
     for (const slot of this.slots) {
       if (slot.active && slot.id === id) {
-        slot.active = false;
-        slot.group.visible = false;
+        this.finishFlight(slot);
       }
+    }
+  }
+
+  // Конец полёта: ракета прячется; слот со следом остаётся занят фазой fading (след тает
+  // TRAIL_FADE_T сек), без следа — освобождается сразу (прежнее поведение «из космоса»).
+  private finishFlight(slot: MissileSlot): void {
+    slot.group.visible = false;
+    if (slot.hasTrail && !slot.fading) {
+      slot.fading = true;
+      slot.fadeT = TRAIL_FADE_T;
+      slot.uHead.value = 1.01; // вся дуга видима, пока тает
+    } else if (!slot.hasTrail) {
+      slot.active = false;
+    }
+  }
+
+  // Немедленно прячет все ракеты и следы (planetReset).
+  clear(): void {
+    for (const slot of this.slots) {
+      slot.active = false;
+      slot.fading = false;
+      slot.group.visible = false;
+      slot.trailLine.visible = false;
     }
   }
 
@@ -219,9 +323,22 @@ export class MissileView {
     for (const slot of this.slots) {
       if (!slot.active) continue;
 
+      // Тающий след после детонации: слот занят, но ракета уже не летит.
+      if (slot.fading) {
+        slot.fadeT -= dt;
+        slot.uFade.value = Math.max(0, slot.fadeT / TRAIL_FADE_T);
+        if (slot.fadeT <= 0) {
+          slot.active = false;
+          slot.fading = false;
+          slot.trailLine.visible = false;
+        }
+        continue;
+      }
+
       slot.t += dt;
       const k = Math.min(1, slot.t / slot.flightTime);
       if (slot.ballistic) {
+        slot.uHead.value = k;
         ballisticPosInto(slot.fromP, slot.toP, k, slot.posP);
         slot.group.position.set(slot.posP.x, slot.posP.y, slot.posP.z);
         const ka = Math.min(1, k + 0.02);
@@ -239,10 +356,7 @@ export class MissileView {
       slot.model.rotation.z += dt * MODEL_SPIN_SPEED;
       slot.flame.scale.y = FLAME_BASE_SCALE + Math.random() * FLAME_JITTER;
 
-      if (k >= 1) {
-        slot.active = false;
-        slot.group.visible = false;
-      }
+      if (k >= 1) this.finishFlight(slot);
     }
   }
 }

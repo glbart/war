@@ -114,6 +114,7 @@ export class Scene {
         this.startExplosion(event.dir, event.yield, event.seed, event.surface, event.biome);
         break;
       case 'planetReset':
+        this.missileView.clear();
         this.decalView.clear();
         this.damageField.clear();
         this.waterField.clear();
