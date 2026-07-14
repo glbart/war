@@ -1,6 +1,7 @@
-// Накопительное equirect-поле урона планеты. Каналы: R=глубина чаши (вниз), G=гарь-градиент
-// (широкий, мягкий, шире самой чаши), B=оплавление/полынья (лёд, как раньше), A=вал+эжекта
-// (вверх — кольцевой бугор породы и лёгкое наслоение выброса за ним).
+// Накопительное equirect-поле урона планеты. Каналы: R=очаги трещин (сила × спад от ямы;
+// пишется ТОЛЬКО глубокими пробитиями — uCrack, см. Scene/crackStrengthForDepth; читается
+// эмиссией трещин GlobeView/CrustView), G=гарь-градиент (широкий, мягкий, шире самой чаши),
+// B=оплавление/полынья (лёд, как раньше), A=вал+эжекта (историческое, никем не читается).
 // Splat — разовый рендер мягкого штампа в точку эпицентра (не на кадр). Кратеры сливаются
 // поканальным max (наложения дают самую глубокую воронку, а не суммарную дыру).
 //
@@ -43,6 +44,7 @@ import {
   CRATER_RIM_WIDTH_FRAC,
   CRATER_EJECTA_FRAC,
   CRATER_SCORCH_FRAC,
+  CRACK_EXTENT_FRAC,
 } from '../assets/config';
 
 // Радиусы поля урона по мощности (доля equirect-UV). Уменьшены ~вдвое по фидбэку
@@ -69,6 +71,7 @@ export class DamageField {
   private readonly uCenter: Vec2Uniform;
   private readonly uRadius: FloatUniform;
   private readonly uKind: FloatUniform; // 0=land, 1=ice
+  private readonly uCrack: FloatUniform; // сила трещинного очага [0..1]; 0 — R не пишется
 
   constructor(private readonly ctx: ThreeCtx) {
     const { THREE } = ctx;
@@ -98,6 +101,7 @@ export class DamageField {
     this.uCenter = makeVec2Uniform(new THREE.Vector2(0.5, 0.5));
     this.uRadius = makeFloatUniform(0.05);
     this.uKind = makeFloatUniform(0);
+    this.uCrack = makeFloatUniform(0);
 
     // Профиль штампа: чаша глубины по угловому расстоянию до центра. Аспект equirect 2:1 даёт
     // базовый множитель 2 по U, но у полюсов долгота «сжимается» на cos(lat) — без поправки
@@ -111,7 +115,12 @@ export class DamageField {
     // ВАЖНО: smoothstep на GPU определён только при edge0 < edge1 (иначе поведение вдали не
     // клампится и после внешнего clamp даёт 1 → damage≈1 ПО ВСЕЙ сфере → серит планету). Поэтому
     // «убывающие» профили пишем как oneMinus(smoothstep(меньший, больший, …)) — корректный порядок.
-    const depth = oneMinus(smoothstep(float(0), float(1), dNorm)); // чаша: 1 в центре → 0 на краю
+    const bowl = oneMinus(smoothstep(float(0), float(1), dNorm)); // чаша: 1 в центре → 0 на краю
+    // R — очаг трещин: спад от края ямы наружу до CRACK_EXTENT_FRAC, гейт силой очага
+    // (uCrack=0 у неглубоких ударов — канал не трогается: max с prev сохраняет старое).
+    const crack = this.uCrack.mul(
+      oneMinus(smoothstep(float(0.5), float(CRACK_EXTENT_FRAC), dNorm)),
+    );
     const rimX = dNorm.sub(float(CRATER_RIM_FRAC)).div(float(CRATER_RIM_WIDTH_FRAC));
     const rim = exp(rimX.mul(rimX).negate()); // вал: гаусс за краем чаши
     // Эжекта: кольцо СНАРУЖИ чаши — спад от вала наружу, домноженный на внутренний ramp,
@@ -120,9 +129,9 @@ export class DamageField {
       smoothstep(float(CRATER_RIM_FRAC), float(CRATER_EJECTA_FRAC), dNorm),
     ).mul(smoothstep(float(1), float(CRATER_RIM_FRAC), dNorm));
     const scorch = oneMinus(smoothstep(float(0), float(CRATER_SCORCH_FRAC), dNorm)); // широкая гарь
-    const melt = clamp(depth.mul(this.uKind), 0, 1); // только лёд, форма как у чаши
+    const melt = clamp(bowl.mul(this.uKind), 0, 1); // только лёд, форма как у чаши
     const stamp = vec4(
-      clamp(depth, 0, 1),
+      clamp(crack, 0, 1),
       clamp(scorch, 0, 1),
       melt,
       clamp(rim.add(ejecta.mul(0.35)), 0, 1),
@@ -155,7 +164,8 @@ export class DamageField {
   }
 
   // Впечатывает воронку в поле. kind='ice' поднимает канал оплавления (полынья).
-  splat(dir: Vec3, yieldMt: number, kind: 'land' | 'ice'): void {
+  // crack — сила трещинного очага [0..1] (crackStrengthForDepth): 0 у неглубоких ударов.
+  splat(dir: Vec3, yieldMt: number, kind: 'land' | 'ice', crack = 0): void {
     const { lon, lat } = dirToLonLat(dir);
     // V-конвенция: сфера сэмплит поле при uv.y=(lat+π/2)/π, но RT-сэмплинг отражён по V
     // относительно координат ЗАПИСИ (см. комментарий у prevSample) — потому центр штампа
@@ -164,6 +174,7 @@ export class DamageField {
     this.uCenter.value.set((lon + Math.PI) / (2 * Math.PI), (Math.PI / 2 - lat) / Math.PI);
     this.uRadius.value = ANG_BY_YIELD[yieldMt] ?? 0.05;
     this.uKind.value = kind === 'ice' ? 1 : 0;
+    this.uCrack.value = crack;
 
     // Снимок текущего поля в prevRt ДО перезаписи rt — материал штампа читает именно его,
     // иначе rt читался бы и писался в одном проходе (петля обратной связи).
