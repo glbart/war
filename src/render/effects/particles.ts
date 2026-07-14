@@ -205,6 +205,17 @@ class ParticleMesh {
     this.attrC.needsUpdate = true;
     this.dirty = false;
   }
+
+  // Немедленно гасит все частицы (planetReset): spawn=+∞ → невидимы, курсор в начало.
+  clear(): void {
+    for (let i = 0; i < this.capacity; i++) {
+      this.aA[i * 4] = 1e9;
+      this.aA[i * 4 + 1] = 1;
+    }
+    this.write = 0;
+    this.dirty = true;
+    this.flush();
+  }
 }
 
 export class ParticlePool {
@@ -220,6 +231,13 @@ export class ParticlePool {
   // Обновляет общие часы шейдера (секунды). Вызывается раз за кадр.
   setTime(t: number): void {
     this.uTime.value = t;
+  }
+
+  // Немедленно гасит огонь и дым гриба (planetReset) — включая ещё не родившиеся частицы
+  // с отложенным spawn.
+  clear(): void {
+    this.fire.clear();
+    this.smoke.clear();
   }
 
   // Порождает пачку частиц гриба для взрыва в направлении dir (единичная нормаль эпицентра,

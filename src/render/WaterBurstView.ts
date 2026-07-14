@@ -223,6 +223,20 @@ export class WaterBurstView {
     slot.uRingOp.value = 0.9;
   }
 
+  // Немедленно гасит все активные всплески (planetReset).
+  clear(): void {
+    for (const slot of this.slots) {
+      if (!slot.active) continue;
+      slot.active = false;
+      slot.dome.scale.setScalar(0);
+      slot.uDomeOp.value = 0;
+      slot.column.scale.set(0, 0, 0);
+      slot.uColumnOp.value = 0;
+      slot.ring.scale.setScalar(0);
+      slot.uRingOp.value = 0;
+    }
+  }
+
   // Гонит таймлайн активных слотов через юниформы/трансформы — без аллокаций и
   // перекомпиляций шейдера. Слот живёт, пока не завершится самая долгая фаза (кольцо).
   update(dt: number): void {

@@ -258,6 +258,18 @@ export class EjectaView {
     this.flush();
   }
 
+  // Немедленно гасит все частицы выброса (planetReset) — включая отложенные пыхи
+  // приземления глыб (их spawn в будущем).
+  clear(): void {
+    for (let i = 0; i < CAPACITY; i++) {
+      this.aA[i * 4] = 1e9;
+      this.aA[i * 4 + 1] = 1;
+    }
+    this.write = 0;
+    this.dirty = true;
+    this.flush();
+  }
+
   // Заливает изменённые атрибуты на GPU одним махом (только если что-то писали).
   private flush(): void {
     if (!this.dirty) return;
