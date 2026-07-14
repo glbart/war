@@ -24,11 +24,18 @@ export function setEmissiveNode(mat: object, node: Vec3Node): void {
   (mat as { emissiveNode: Vec3Node | null }).emissiveNode = node;
 }
 
-export function crackEmissiveNode(crackR: FloatNode, p: Vec3Node, uTime: FloatNode): Vec3Node {
+export function crackEmissiveNode(
+  crackR: FloatNode,
+  p: Vec3Node,
+  uTime: FloatNode,
+  boost: FloatNode,
+): Vec3Node {
+  // Глобальный буст (агония раскола, этап 4): жилы разгораются по всей планете.
+  const effCrack = clamp(crackR.add(boost), 0, 1);
   // Ридж: жилы там, где fbm проходит через середину диапазона (|2x−1|→0).
   const ridge = oneMinus(abs(fbm3(p.mul(CRACK_FREQ), 4).mul(2).sub(1)));
   const veins = smoothstep(float(CRACK_EDGE0), float(CRACK_EDGE1), ridge);
   const pulse = float(0.78).add(sin(uTime.mul(1.7)).mul(0.22));
-  const glow = clamp(veins.mul(crackR).mul(pulse).mul(CRACK_INTENSITY), 0, CRACK_INTENSITY);
+  const glow = clamp(veins.mul(effCrack).mul(pulse).mul(CRACK_INTENSITY), 0, CRACK_INTENSITY);
   return vec3(CRACK_COLOR[0], CRACK_COLOR[1], CRACK_COLOR[2]).mul(glow);
 }

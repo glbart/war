@@ -58,3 +58,38 @@ export function playBoom(yieldMt: number): void {
   osc.start(t0);
   osc.stop(t0 + dur);
 }
+
+// Грохот раскола планеты (этап 4): длиннее и ниже взрыва — 10-секундный шум с ФНЧ,
+// уходящей в инфразвук, поверх тона 34→14 Гц. intensity: 0.7 — старт агонии, 1.6 — распад.
+export function playShatter(intensity: number): void {
+  const ctx = audioCtx;
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const dur = 10;
+
+  const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 1.8);
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buf;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(300, t0);
+  lp.frequency.exponentialRampToValueAtTime(18, t0 + dur);
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 0.5 * intensity;
+  noise.connect(lp).connect(noiseGain).connect(ctx.destination);
+  noise.start(t0);
+
+  const osc = ctx.createOscillator();
+  osc.frequency.setValueAtTime(34, t0);
+  osc.frequency.exponentialRampToValueAtTime(14, t0 + dur);
+  const oscGain = ctx.createGain();
+  oscGain.gain.setValueAtTime(0.4 * intensity, t0);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  osc.connect(oscGain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur);
+}

@@ -92,6 +92,12 @@ export class TileLayers {
     if (labels) labels.enabled = v;
   }
 
+  // Видимость всех тайл-групп разом (раскол планеты, этап 4): подписи/границы не должны
+  // парить вокруг магмы-ядра. Не трогает enabled — после reset слой возвращается как был.
+  setVisible(v: boolean): void {
+    for (const layer of this.layers) layer.group.visible = v;
+  }
+
   // Вызывать раз в ~0.3с из игрового цикла — дороже кадрового рендера.
   update(): void {
     for (const layer of this.layers) this.reconcileLayer(layer);

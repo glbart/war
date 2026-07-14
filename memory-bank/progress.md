@@ -12,8 +12,30 @@ _Обновлено: 2026-07-14_
 
 **Обломки-глыбы (этап 2 реальной разрушаемости): завершены** (влиты в master 2026-07-14).
 
-**Трещины и целостность (этап 3): реализованы** (ветка `feat/cracks-integrity`). См. раздел
-ниже. Дальше по дорожной карте — этап 4 (раскол планеты при integrity=0, финал).
+**Трещины и целостность (этап 3): завершены** (влиты в master 2026-07-14).
+
+**Раскол планеты (этап 4): реализован** (ветка `feat/planet-shatter`). **Дорожная карта
+«реальной разрушаемости» (спека 2026-07-06 §3) полностью закрыта.** Дальше — бэклог (ниже).
+
+## Раскол планеты (2026-07-14)
+
+- ✅ **ShatterState** (`render/shatterState.ts`, чистый TS): intact→agony→shattered;
+  boost 0→1 линейно за SHATTER_AGONY_T=4.5с; событие 'shatter' ровно один раз; reset;
+  повторный trigger — no-op. 5 юнит-тестов.
+- ✅ **Агония**: глобальный буст трещин — 4-й аргумент `crackEmissiveNode(crackR, p, uTime,
+  boost)`, `effCrack = clamp(R + boost)` → жилы разгораются по всей планете; тряска растёт с
+  boost; `playShatter(0.7)`.
+- ✅ **Распад**: `GlobeView.setPlanetVisible(false)` (глобус+атмосфера), океан
+  `oceanShell.mesh.visible`, `CrustView.setVisible(false)`, `TileLayers.setVisible(false)`
+  (новый метод, из main.ts); `MagmaCore.setBoost` (ядро к бело-жёлтому);
+  `DebrisView.emitShatter(seed, now)` — 140 крупных вечных осколков (орбитальный сегмент,
+  r 1.05–1.9, размер 0.05–0.18, медленное кувыркание); `playShatter(1.6)` + толчок тряски.
+- ✅ **Глушение ударов** в shattered: Scene пропускает missileLaunched/explosionStarted
+  (three-рейкаст не учитывает visible — глушим на приёмнике, ввод не трогаем).
+- ✅ **HUD**: баннер `#shatter` «☠ ПЛАНЕТА РАСКОЛОТА» (стиль в styles.css), кэш-сеттер;
+  reset прячет. `playShatter` — новый синтез в effects/sound.ts (10с, ФНЧ 300→18 Гц).
+- ✅ Проверки: 109 юнит-тестов, tsc, vite build, eslint+prettier — чисто. Визуальная
+  приёмка — за юзером (добить до 0% или временно снизить CRUST_DOOM_VOXELS).
 
 ## Трещины и целостность (2026-07-14)
 

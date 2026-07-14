@@ -32,6 +32,8 @@ export class Hud {
   private readonly deathsEl: HTMLElement;
   private readonly integrityEl: HTMLElement;
   private lastIntegrityPct = 100; // кэш выведенного процента — DOM трогаем только при смене
+  private readonly shatterEl: HTMLElement;
+  private lastShattered = false; // кэш баннера раскола — DOM только при смене
   private readonly feedEl: HTMLElement;
   private readonly labelsBtn: HTMLButtonElement;
   private readonly yieldButtons: HTMLButtonElement[];
@@ -49,6 +51,7 @@ export class Hud {
     root.id = 'ui';
     root.innerHTML = `
       <h1>☢ ЯДЕРНАЯ ПЕСОЧНИЦА</h1>
+      <div id="shatter" style="display: none">☠ ПЛАНЕТА РАСКОЛОТА</div>
       <div id="stats">Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
       <div id="feed"></div>
       <div class="row">
@@ -67,6 +70,7 @@ export class Hud {
     this.megatonsEl = root.querySelector<HTMLElement>('#megatons')!;
     this.deathsEl = root.querySelector<HTMLElement>('#deaths')!;
     this.integrityEl = root.querySelector<HTMLElement>('#integrity')!;
+    this.shatterEl = root.querySelector<HTMLElement>('#shatter')!;
     this.feedEl = root.querySelector<HTMLElement>('#feed')!;
     this.labelsBtn = root.querySelector<HTMLButtonElement>('#labels')!;
     const resetBtn = root.querySelector<HTMLButtonElement>('#reset')!;
@@ -101,6 +105,13 @@ export class Hud {
     this.lastIntegrityPct = pct;
     this.integrityEl.textContent = `${pct}%`;
     this.integrityEl.style.color = pct < 35 ? '#ff5544' : pct < 70 ? '#ffcc44' : '';
+  }
+
+  // Баннер раскола (этап 4) — опрашивается main.ts раз за кадр, DOM только при смене.
+  setShattered(v: boolean): void {
+    if (v === this.lastShattered) return;
+    this.lastShattered = v;
+    this.shatterEl.style.display = v ? '' : 'none';
   }
 
   // Разбирает событие симуляции (уже слитое main.ts через host.drainEvents() и розданное

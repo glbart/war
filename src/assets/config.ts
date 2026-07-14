@@ -158,3 +158,13 @@ export const CRACK_EDGE0 = 0.86; // порог начала жилы (ширин
 export const CRACK_EDGE1 = 0.97;
 export const CRACK_COLOR = [1.0, 0.42, 0.1] as const; // магма (согласовано с MagmaCore)
 export const CRACK_INTENSITY = 1.6; // множитель эмиссии (перекрывает гарь-затемнение)
+
+// ---------- Раскол планеты (спека 2026-07-14-planet-shatter-design.md) ----------
+export const SHATTER_AGONY_T = 4.5; // сек агонии (глобальный разгорающийся буст трещин)
+export const SHATTER_SHARD_COUNT = 140; // крупных осколков раскола (орбитальный сегмент DebrisView)
+export const SHATTER_SHARD_SIZE_MIN = 0.05;
+export const SHATTER_SHARD_SIZE_MAX = 0.18;
+export const SHATTER_SHARD_R_MIN = 1.05; // радиусы поля обломков вокруг ядра
+export const SHATTER_SHARD_R_MAX = 1.9;
+export const SHATTER_SHARD_OMEGA_MIN = 0.05; // рад/с — медленное кружение крупных осколков
+export const SHATTER_SHARD_OMEGA_MAX = 0.2;

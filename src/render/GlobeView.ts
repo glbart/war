@@ -50,6 +50,8 @@ export class GlobeView {
 
   private readonly readyPromise: Promise<void>;
   private readonly uTime = makeFloatUniform(0); // часы пульса трещин (толкает Scene.update)
+  private readonly uCrackBoost = makeFloatUniform(0); // глобальный буст трещин (агония раскола)
+  private readonly atmoMesh: THREE.Mesh; // атмосфера — прячется вместе с глобусом при расколе
 
   constructor(ctx: ThreeCtx, damageTex: THREE.Texture, holeTex: THREE.Texture) {
     const { THREE } = ctx;
@@ -85,7 +87,10 @@ export class GlobeView {
     earthMaterial.colorNode = mix(withIceRim, vec3(0.05, 0.12, 0.2), openWater);
 
     // Светящиеся трещины глубоких очагов (R поля урона) — эмиссивно, поверх гари (этап 3).
-    setEmissiveNode(earthMaterial, crackEmissiveNode(dmg.r, normalize(positionLocal), this.uTime));
+    setEmissiveNode(
+      earthMaterial,
+      crackEmissiveNode(dmg.r, normalize(positionLocal), this.uTime, this.uCrackBoost),
+    );
 
     // Дырки коры: там, где HoleMask=1, фрагмент глобуса отбрасывается (регион рисует CrustView).
     // alphaTest-путь node-материалов делает discard без transparent-прохода.
@@ -103,7 +108,8 @@ export class GlobeView {
     );
     this.spinGroup.add(this.earthMesh);
 
-    this.spinGroup.add(this.buildAtmosphere(ctx));
+    this.atmoMesh = this.buildAtmosphere(ctx);
+    this.spinGroup.add(this.atmoMesh);
 
     this.readyPromise = this.loadTexture(ctx, earthMaterial);
   }
@@ -144,6 +150,17 @@ export class GlobeView {
   // Часы шейдера трещин (пульс) — толкает Scene.update раз за кадр.
   setTime(t: number): void {
     this.uTime.value = t;
+  }
+
+  // Глобальный буст трещин (агония раскола, этап 4) — гонит Scene.update.
+  setCrackBoost(v: number): void {
+    this.uCrackBoost.value = v;
+  }
+
+  // Раскол: глобус и атмосфера скрываются (магма-ядро и осколки — забота Scene).
+  setPlanetVisible(v: boolean): void {
+    this.earthMesh.visible = v;
+    this.atmoMesh.visible = v;
   }
 
   // Резолвится сразу же (биом-текстура и узлы материала готовы синхронно в конструкторе);
