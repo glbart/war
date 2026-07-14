@@ -93,3 +93,10 @@
   font-size: 10px;
   color: #5a6d8c;
 }
+#shatter {
+  color: #ff5544;
+  font-weight: bold;
+  letter-spacing: 2px;
+  margin: 4px 0 8px;
+  text-shadow: 0 0 8px rgba(255, 60, 30, 0.7);
+}
