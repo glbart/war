@@ -25,6 +25,7 @@ import {
   lessThan,
   select,
   smoothstep,
+  exp,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
@@ -56,6 +57,12 @@ import {
   SHATTER_ESCAPE_R_MAX,
   SHATTER_ESCAPE_SIZE_MIN,
   SHATTER_ESCAPE_SIZE_MAX,
+  SHATTER_MOLTEN_COUNT,
+  SHATTER_MOLTEN_R_MIN,
+  SHATTER_MOLTEN_R_MAX,
+  SHATTER_MOLTEN_SIZE_MIN,
+  SHATTER_MOLTEN_SIZE_MAX,
+  SHATTER_COOL_TAU,
 } from '../assets/config';
 
 const CAPACITY = DEBRIS_ORBIT_SLOTS + DEBRIS_BALLISTIC_SLOTS;
@@ -96,7 +103,7 @@ export class DebrisView {
   private readonly aC: Float32Array; // (dirX, dirY, dirZ, rotSpeed)
   private readonly aD: Float32Array; // (axisX, axisY, axisZ, rotPhase)
   private readonly aE: Float32Array; // (scaleX, scaleY, scaleZ, pad)
-  private readonly aF: Float32Array; // (colR, colG, colB, pad)
+  private readonly aF: Float32Array; // (colR, colG, colB, heat)  heat>0 — раскалённый расплав
   private readonly attrs: THREE.InstancedBufferAttribute[];
   private readonly slots = new DebrisSlots(DEBRIS_ORBIT_SLOTS, DEBRIS_BALLISTIC_SLOTS);
   private dirty = false;
@@ -160,6 +167,7 @@ export class DebrisView {
     const rotPhase = aD.w;
     const scaleV = aE.xyz;
     const baseColor = aF.xyz;
+    const heat = aF.w;
 
     const pt = this.uTime.sub(spawn);
     const tau = max(pt, 0);
@@ -211,9 +219,14 @@ export class DebrisView {
     const light = normalize(vec3(0.5, 0.75, 0.44));
     const shade = float(0.45).add(max(dot(normalize(nRot), light), 0).mul(0.55));
 
+    // Раскалённый расплав (ревизия §7): свечение экспоненциально остывает от рождения,
+    // цвет сдвигается бело-жёлтый → красный по мере остывания (реальное остывание расплава).
+    const heatNow = heat.mul(exp(tau.negate().div(SHATTER_COOL_TAU)));
+    const glowColor = mix(vec3(1.0, 0.22, 0.05), vec3(1.0, 0.9, 0.62), heatNow);
+
     const material = new THREE.MeshBasicNodeMaterial();
     material.positionNode = center.add(pRot);
-    material.colorNode = clamp(baseColor.mul(shade), 0, 1);
+    material.colorNode = clamp(baseColor.mul(shade).add(glowColor.mul(heatNow.mul(1.5))), 0, 2);
     return material;
   }
 
@@ -242,6 +255,7 @@ export class DebrisView {
     r: number,
     gcol: number,
     b: number,
+    heat = 0, // >0 — раскалённый расплав (ревизия §7); ВСЕГДА пишется (переиспользование слотов)
   ): void {
     const o = i * 4;
     this.aA[o] = spawn;
@@ -266,6 +280,7 @@ export class DebrisView {
     this.aF[o] = r;
     this.aF[o + 1] = gcol;
     this.aF[o + 2] = b;
+    this.aF[o + 3] = heat;
     this.dirty = true;
   }
 
@@ -480,6 +495,56 @@ export class DebrisView {
         cr * bright,
         cg * bright,
         cb * bright,
+      );
+    }
+    this.flush();
+  }
+
+  // Разрыв ядра (ревизия §7): облако раскалённых капель расплава ядра/мантии — рвущееся
+  // ядро НЕ остаётся целым (SPH-симуляции). heat=1 → свечение с exp-остыванием в шейдере.
+  emitMolten(seed: number, now: number): void {
+    let s = seed | 0 || 1;
+    const rnd = (): number => (s = (s * 16807) % 2147483647) / 2147483647;
+    const TWO_PI = Math.PI * 2;
+    for (let i = 0; i < SHATTER_MOLTEN_COUNT; i++) {
+      const az = rnd() * TWO_PI;
+      const cz = rnd() * 2 - 1;
+      const sxy = Math.sqrt(Math.max(0, 1 - cz * cz));
+      const dir = { x: sxy * Math.cos(az), y: sxy * Math.sin(az), z: cz };
+      const angle = rnd() * TWO_PI;
+      // База — тёмный базальт: когда свечение остынет, останется чёрный шлак.
+      const [cr, cg, cb] = CRUST_LAYER_COLORS.basalt;
+      const bright = 0.7 + rnd() * 0.3;
+      const size =
+        SHATTER_MOLTEN_SIZE_MIN + rnd() * (SHATTER_MOLTEN_SIZE_MAX - SHATTER_MOLTEN_SIZE_MIN);
+      const raz = rnd() * TWO_PI;
+      const rcz = rnd() * 2 - 1;
+      const rsxy = Math.sqrt(Math.max(0, 1 - rcz * rcz));
+      const axis = { x: rsxy * Math.cos(raz), y: rsxy * Math.sin(raz), z: rcz };
+      const omega =
+        (DEBRIS_OMEGA_MIN + rnd() * (DEBRIS_OMEGA_MAX - DEBRIS_OMEGA_MIN)) * (rnd() < 0.5 ? -1 : 1);
+      const orbitR = SHATTER_MOLTEN_R_MIN + rnd() * (SHATTER_MOLTEN_R_MAX - SHATTER_MOLTEN_R_MIN);
+      this.writeDebris(
+        this.slots.nextOrbital(),
+        now,
+        1,
+        1,
+        angle,
+        0,
+        0,
+        omega,
+        orbitR,
+        dir,
+        (0.5 + rnd() * 2) * (rnd() < 0.5 ? -1 : 1),
+        axis,
+        rnd() * TWO_PI,
+        size * (0.7 + rnd() * 0.6),
+        size * (0.7 + rnd() * 0.6),
+        size * (0.7 + rnd() * 0.6),
+        cr * bright,
+        cg * bright,
+        cb * bright,
+        1, // heat: рождается добела раскалённым
       );
     }
     this.flush();

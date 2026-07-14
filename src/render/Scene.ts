@@ -238,10 +238,12 @@ export class Scene {
       this.rig.shake = Math.max(this.rig.shake, 0.12);
     }
     if (ev === 'collapse') {
-      // Распад ядра (ревизия §6): вспышка глушит момент — кольцо мусора очищается и
-      // заменяется финальным разлётом прочь. От планеты не остаётся ничего.
+      // Разрыв ядра (ревизии §6-7): целого ядра не остаётся — вспышка прорыва расплава,
+      // кольцо мусора очищается и заменяется облаком раскалённых капель (остывают в шейдере)
+      // и разлётом прочь. От планеты не остаётся ничего.
       this.debrisView.clear();
-      this.debrisView.emitEscape(1337, this.clock);
+      this.debrisView.emitMolten(1337, this.clock);
+      this.debrisView.emitEscape(7331, this.clock);
       playShatter(2.0);
       this.rig.shake = Math.max(this.rig.shake, 0.15);
     }
@@ -253,7 +255,8 @@ export class Scene {
       const collapse = Math.max(0, cp * 2 - 1);
       this.magma.mesh.scale.setScalar(Math.max((1 + 0.5 * flash) * (1 - collapse), 1e-4));
       this.magma.mesh.visible = cp < 1;
-      this.magma.setBoost(1 + flash * 3.5);
+      // Скромнее ядерного взрыва: это прорыв расплава, не вспышка бомбы (ревизия §7).
+      this.magma.setBoost(1 + flash * 2.5);
     } else {
       this.magma.setBoost(boost);
     }
