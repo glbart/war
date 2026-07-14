@@ -21,6 +21,8 @@ import {
   smoothstep,
   float,
   PI,
+  uniform,
+  oneMinus,
 } from 'three/tsl';
 import type { ThreeCtx } from './Renderer';
 import { buildShardData } from './shatterShards';
@@ -33,7 +35,13 @@ import {
   SHATTER_PLATE_SPEED_MAX,
   SHATTER_PLATE_RAMP_T,
   SHATTER_PLATE_SPIN_MAX,
+  SHATTER_COOL_T,
 } from '../assets/config';
+
+// Точный тип float-юниформа (как в MagmaCore): .value — number.
+function makeFloatUniform(v: number) {
+  return uniform(v);
+}
 
 interface ShardMotion {
   mesh: THREE.Mesh;
@@ -48,6 +56,7 @@ export class ShatterShardsView {
   private readonly material: THREE.MeshPhongNodeMaterial;
   private shards: ShardMotion[] = [];
   private elapsed = 0; // сек с момента раскола
+  private readonly uCool = makeFloatUniform(0); // остывание срезов 0→1 (ревизия §7)
   private readonly tmpQuat: THREE.Quaternion; // переиспользуемый кватернион кувыркания
 
   constructor(
@@ -77,18 +86,21 @@ export class ShatterShardsView {
       1,
     );
     const cl = CRUST_LAYER_COLORS;
+    // Остывание (ревизия §7): срезы гаснут за SHATTER_COOL_T — магмовый градиент тускнеет
+    // к тёмной породе, эмиссия сходит на нет; спустя полминуты летят холодные тёмные куски.
+    const heat = oneMinus(this.uCool);
     const hotRock = mix(
       vec3(cl.rock[0], cl.rock[1], cl.rock[2]),
       vec3(CRACK_COLOR[0], CRACK_COLOR[1], CRACK_COLOR[2]),
-      smoothstep(float(0.35), float(1), depth),
+      smoothstep(float(0.35), float(1), depth).mul(heat),
     );
     // Корка → горячая порода: переход сразу под поверхностью (срезы читаются как разлом).
     mat.colorNode = mix(biome, hotRock, smoothstep(float(0.02), float(0.12), depth));
-    // Изнанка светится магмой (кламп ≥0 — грабли NodeMaterial).
+    // Изнанка светится магмой, пока горяча (кламп ≥0 — грабли NodeMaterial).
     setEmissiveNode(
       mat,
       vec3(CRACK_COLOR[0], CRACK_COLOR[1], CRACK_COLOR[2]).mul(
-        clamp(depth.mul(depth).mul(0.9), 0, 1),
+        clamp(depth.mul(depth).mul(0.9).mul(heat), 0, 1),
       ),
     );
     this.material = mat;
@@ -128,6 +140,7 @@ export class ShatterShardsView {
   update(dt: number): void {
     if (this.shards.length === 0) return;
     this.elapsed += dt;
+    this.uCool.value = Math.min(1, this.elapsed / SHATTER_COOL_T);
     const r = Math.min(1, this.elapsed / SHATTER_PLATE_RAMP_T);
     const ramp = r * r * (3 - 2 * r);
     for (const sh of this.shards) {
@@ -146,5 +159,6 @@ export class ShatterShardsView {
     }
     this.shards = [];
     this.elapsed = 0;
+    this.uCool.value = 0;
   }
 }
