@@ -20,7 +20,7 @@ import type { DamageField } from './DamageField';
 import { WaterField } from './WaterField';
 import { OceanShell } from './OceanShell';
 import { buildCoastTexture } from './CoastField';
-import { Crust } from '../crust/Crust';
+import { Crust, crackStrengthForDepth } from '../crust/Crust';
 import { CrustView } from './CrustView';
 import { MagmaCore } from './MagmaCore';
 import type { HoleMask } from './HoleMask';
@@ -52,8 +52,9 @@ export class Scene {
   private readonly crustView: CrustView;
   private readonly magma: MagmaCore;
   private clock = 0; // общие часы рендера (секунды); база спавна частиц и uTime шейдера
+  private readonly globe: GlobeView; // нужен полем: часы пульса трещин (globe.setTime в update)
 
-  // ctx/globe/host не сохраняются полями — используются только здесь, при постройке владений
+  // ctx/host не сохраняются полями — используются только здесь, при постройке владений
   // Scene; host снова понадобится полем, когда придёт сеть/реплей (пока события идут через
   // handleEvents()). Взрыв (огненный шар/волна/частицы) крепится к globe.spinGroup, как и ракеты.
   constructor(
@@ -65,6 +66,7 @@ export class Scene {
     private readonly holeMask: HoleMask,
   ) {
     void host; // пока не используется — события приходят через handleEvents(), не через host
+    this.globe = globe;
     this.missileView = new MissileView(ctx, globe.spinGroup);
     this.explosionView = new ExplosionView(ctx, globe.spinGroup);
     this.waterBurstView = new WaterBurstView(ctx, globe.spinGroup);
@@ -139,8 +141,8 @@ export class Scene {
       this.particlePool.emit(dir, yieldMt, seed, this.clock);
       this.ejectaView.emit(dir, yieldMt, seed, this.clock);
       this.decalView.spawn(dir, yieldMt, seed);
-      this.damageField.splat(dir, yieldMt, surface === 'ice' ? 'ice' : 'land');
-      // Выгрызаем кору: воксельная морфология кратера (displacement демонтирован в GlobeView)
+      // Выгрызаем кору ДО splat поля урона: глубина пробития (deepestLayer) определяет силу
+      // трещинного очага, который splat пишет в R-канал (этап 3).
       const carved = this.crust.carve(
         dir,
         CRUST_RADIUS_BY_YIELD[yieldMt] ?? 0.02,
@@ -148,6 +150,12 @@ export class Scene {
         seed,
       );
       this.crustView.update(carved.changed);
+      this.damageField.splat(
+        dir,
+        yieldMt,
+        surface === 'ice' ? 'ice' : 'land',
+        crackStrengthForDepth(carved.deepestLayer),
+      );
       // Дискард глобуса — по ДИСКУ реального карва (не по AABB чанка): см. HoleMask.markCarve
       this.holeMask.markCarve(dir, CRUST_RADIUS_BY_YIELD[yieldMt] ?? 0.02);
       // Глыбы выбитой породы: разлёт + пополнение орбитального кольца (этап 2, спека
@@ -192,5 +200,12 @@ export class Scene {
     this.debrisView.setTime(this.clock);
     this.decalView.update(dt);
     this.magma.setTime(this.clock);
+    this.globe.setTime(this.clock);
+    this.crustView.setTime(this.clock);
+  }
+
+  // Целостность коры [0..1] — для HUD (main.ts опрашивает раз за кадр).
+  get crustIntegrity(): number {
+    return this.crust.integrity();
   }
 }
