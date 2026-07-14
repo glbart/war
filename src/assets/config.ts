@@ -168,3 +168,11 @@ export const SHATTER_SHARD_R_MIN = 1.05; // радиусы поля обломк
 export const SHATTER_SHARD_R_MAX = 1.9;
 export const SHATTER_SHARD_OMEGA_MIN = 0.05; // рад/с — медленное кружение крупных осколков
 export const SHATTER_SHARD_OMEGA_MAX = 0.2;
+// Куски-плиты киношного разрыва (ревизия спеки §5): оболочка сферы бьётся Вороным на куски,
+// которые в замедленном темпе разлетаются в стороны.
+export const SHATTER_PLATE_COUNT = 14;
+export const SHATTER_SHELL_INNER = 0.952; // внутренний радиус оболочки кусков (чуть выше магмы)
+export const SHATTER_PLATE_SPEED_MIN = 0.05; // скорость разлёта куска (радиусов/с, после разгона)
+export const SHATTER_PLATE_SPEED_MAX = 0.12;
+export const SHATTER_PLATE_RAMP_T = 6; // сек разгона от нуля («замедленный режим»)
+export const SHATTER_PLATE_SPIN_MAX = 0.25; // рад/с — максимум медленного кувыркания куска
