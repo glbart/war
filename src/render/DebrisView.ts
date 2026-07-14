@@ -51,6 +51,11 @@ import {
   SHATTER_SHARD_R_MAX,
   SHATTER_SHARD_OMEGA_MIN,
   SHATTER_SHARD_OMEGA_MAX,
+  SHATTER_ESCAPE_COUNT,
+  SHATTER_ESCAPE_R_MIN,
+  SHATTER_ESCAPE_R_MAX,
+  SHATTER_ESCAPE_SIZE_MIN,
+  SHATTER_ESCAPE_SIZE_MAX,
 } from '../assets/config';
 
 const CAPACITY = DEBRIS_ORBIT_SLOTS + DEBRIS_BALLISTIC_SLOTS;
@@ -411,6 +416,62 @@ export class DebrisView {
         orbitR,
         dir,
         (0.2 + rnd() * 0.8) * (rnd() < 0.5 ? -1 : 1), // медленное кувыркание крупных плит
+        axis,
+        rnd() * TWO_PI,
+        size * (0.7 + rnd() * 0.6),
+        size * (0.7 + rnd() * 0.6),
+        size * (0.7 + rnd() * 0.6),
+        cr * bright,
+        cg * bright,
+        cb * bright,
+      );
+    }
+    this.flush();
+  }
+
+  // Распад ядра (ревизия спеки §6): финальный разлёт ПРОЧЬ — обломки на «орбиты» радиусом
+  // SHATTER_ESCAPE_R (6–14): орбитальная ветка шейдера за DEBRIS_ASCENT_T секунд уносит их
+  // из вида, где они практически исчезают (размеры малы). Вызывается ПОСЛЕ clear() —
+  // от планеты не остаётся ничего, кроме улетающего мусора.
+  emitEscape(seed: number, now: number): void {
+    let s = seed | 0 || 1;
+    const rnd = (): number => (s = (s * 16807) % 2147483647) / 2147483647;
+    const TWO_PI = Math.PI * 2;
+    for (let i = 0; i < SHATTER_ESCAPE_COUNT; i++) {
+      const az = rnd() * TWO_PI;
+      const cz = rnd() * 2 - 1;
+      const sxy = Math.sqrt(Math.max(0, 1 - cz * cz));
+      const dir = { x: sxy * Math.cos(az), y: sxy * Math.sin(az), z: cz };
+      const angle = rnd() * TWO_PI;
+      const m = rnd() < 0.2 ? 'soil' : rnd() < 0.5 ? 'rock' : 'basalt';
+      const [cr, cg, cb] =
+        m === 'soil'
+          ? DEBRIS_SOIL_COLOR
+          : m === 'rock'
+            ? CRUST_LAYER_COLORS.rock
+            : CRUST_LAYER_COLORS.basalt;
+      const bright = 0.85 + rnd() * 0.3;
+      const size =
+        SHATTER_ESCAPE_SIZE_MIN + rnd() * (SHATTER_ESCAPE_SIZE_MAX - SHATTER_ESCAPE_SIZE_MIN);
+      const raz = rnd() * TWO_PI;
+      const rcz = rnd() * 2 - 1;
+      const rsxy = Math.sqrt(Math.max(0, 1 - rcz * rcz));
+      const axis = { x: rsxy * Math.cos(raz), y: rsxy * Math.sin(raz), z: rcz };
+      const omega =
+        (DEBRIS_OMEGA_MIN + rnd() * (DEBRIS_OMEGA_MAX - DEBRIS_OMEGA_MIN)) * (rnd() < 0.5 ? -1 : 1);
+      const orbitR = SHATTER_ESCAPE_R_MIN + rnd() * (SHATTER_ESCAPE_R_MAX - SHATTER_ESCAPE_R_MIN);
+      this.writeDebris(
+        this.slots.nextOrbital(),
+        now,
+        1,
+        1,
+        angle,
+        0,
+        0,
+        omega,
+        orbitR,
+        dir,
+        (1 + rnd() * 3) * (rnd() < 0.5 ? -1 : 1),
         axis,
         rnd() * TWO_PI,
         size * (0.7 + rnd() * 0.6),

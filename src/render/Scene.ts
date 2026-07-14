@@ -124,6 +124,9 @@ export class Scene {
         this.shatter.reset();
         this.shatterShards.clear();
         this.applyShatterVisuals(true);
+        // Ядро могло схлопнуться при распаде — вернуть как было (буст обнулится в update).
+        this.magma.mesh.scale.setScalar(1);
+        this.magma.mesh.visible = true;
         break;
       default:
         break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
@@ -224,7 +227,6 @@ export class Scene {
     const boost = this.shatter.boost;
     this.globe.setCrackBoost(boost);
     this.crustView.setCrackBoost(boost);
-    this.magma.setBoost(boost);
     if (this.shatter.phase === 'agony') this.rig.shake = Math.max(this.rig.shake, 0.05 * boost);
     if (ev === 'shatter') {
       // Бесшовная подмена: глобус скрывается, куски-плиты (вместе — та же сфера) начинают
@@ -234,6 +236,26 @@ export class Scene {
       this.debrisView.emitShatter(1337, this.clock);
       playShatter(1.6);
       this.rig.shake = Math.max(this.rig.shake, 0.12);
+    }
+    if (ev === 'collapse') {
+      // Распад ядра (ревизия §6): вспышка глушит момент — кольцо мусора очищается и
+      // заменяется финальным разлётом прочь. От планеты не остаётся ничего.
+      this.debrisView.clear();
+      this.debrisView.emitEscape(1337, this.clock);
+      playShatter(2.0);
+      this.rig.shake = Math.max(this.rig.shake, 0.15);
+    }
+    // Анимация ядра при распаде: первая половина coreProgress — слепящая вспышка
+    // (раздувание + пересвет), вторая — схлопывание в ноль; в gone магма скрыта.
+    const cp = this.shatter.coreProgress;
+    if (cp > 0) {
+      const flash = Math.min(1, cp * 2);
+      const collapse = Math.max(0, cp * 2 - 1);
+      this.magma.mesh.scale.setScalar(Math.max((1 + 0.5 * flash) * (1 - collapse), 1e-4));
+      this.magma.mesh.visible = cp < 1;
+      this.magma.setBoost(1 + flash * 3.5);
+    } else {
+      this.magma.setBoost(boost);
     }
     this.shatterShards.update(dt);
   }

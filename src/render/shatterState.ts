@@ -5,11 +5,7 @@
 // подменяет глобус кусками); пауза SHATTER_CORE_LINGER_T (куски отходят, ядро обнажается);
 // событие 'collapse' — распад ядра (вспышка+схлопывание за SHATTER_CORE_COLLAPSE_T,
 // прогресс — coreProgress); gone — от планеты не осталось ничего. reset() из любой фазы.
-import {
-  SHATTER_AGONY_T,
-  SHATTER_CORE_LINGER_T,
-  SHATTER_CORE_COLLAPSE_T,
-} from '../assets/config';
+import { SHATTER_AGONY_T, SHATTER_CORE_LINGER_T, SHATTER_CORE_COLLAPSE_T } from '../assets/config';
 
 export type ShatterPhase = 'intact' | 'agony' | 'shattered' | 'collapse' | 'gone';
 export type ShatterEvent = 'shatter' | 'collapse' | null;
