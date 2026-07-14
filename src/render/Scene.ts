@@ -25,6 +25,7 @@ import { CrustView } from './CrustView';
 import { MagmaCore } from './MagmaCore';
 import type { HoleMask } from './HoleMask';
 import { ShatterState } from './shatterState';
+import { ShatterShardsView } from './ShatterShardsView';
 import { playBoom, playShatter } from './effects/sound';
 import {
   WATER_SPLAT_STRENGTH,
@@ -54,6 +55,7 @@ export class Scene {
   private readonly magma: MagmaCore;
   private clock = 0; // общие часы рендера (секунды); база спавна частиц и uTime шейдера
   private readonly shatter = new ShatterState(); // раскол планеты (этап 4)
+  private readonly shatterShards: ShatterShardsView; // куски-плиты киношного разрыва (спека §5)
   private readonly globe: GlobeView; // нужен полем: часы пульса трещин (globe.setTime в update)
 
   // ctx/host не сохраняются полями — используются только здесь, при постройке владений
@@ -90,6 +92,7 @@ export class Scene {
       globe.biomeTexture,
       damageField.texture,
     );
+    this.shatterShards = new ShatterShardsView(ctx, globe.spinGroup, globe.biomeTexture);
   }
 
   // Разбирает события, уже слитые из host.drainEvents() вызывающим кодом (main.ts) —
@@ -119,6 +122,7 @@ export class Scene {
         this.holeMask.clear();
         this.debrisView.clear();
         this.shatter.reset();
+        this.shatterShards.clear();
         this.applyShatterVisuals(true);
         break;
       default:
@@ -223,11 +227,15 @@ export class Scene {
     this.magma.setBoost(boost);
     if (this.shatter.phase === 'agony') this.rig.shake = Math.max(this.rig.shake, 0.05 * boost);
     if (ev === 'shatter') {
+      // Бесшовная подмена: глобус скрывается, куски-плиты (вместе — та же сфера) начинают
+      // замедленный разлёт; мелкий рой — сопутствующий мусор между плитами.
       this.applyShatterVisuals(false);
+      this.shatterShards.spawn(1337);
       this.debrisView.emitShatter(1337, this.clock);
       playShatter(1.6);
       this.rig.shake = Math.max(this.rig.shake, 0.12);
     }
+    this.shatterShards.update(dt);
   }
 
   // Видимость «планеты как целого»: глобус+атмосфера, океан, воксельные чанки.
