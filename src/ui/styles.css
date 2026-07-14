@@ -107,7 +107,11 @@
   bottom: 12px;
   z-index: 10;
   color: #5a6d8c;
-  font: 12px/1 'SF Mono', Menlo, Consolas, monospace;
+  font:
+    12px/1 'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
   background: rgba(8, 14, 26, 0.72);
   border: 1px solid rgba(120, 170, 255, 0.25);
   border-radius: 8px;
@@ -129,7 +133,11 @@
 }
 #changelog {
   color: #cfe3ff;
-  font: 13px/1.55 'SF Mono', Menlo, Consolas, monospace;
+  font:
+    13px/1.55 'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
   background: rgba(8, 14, 26, 0.94);
   border: 1px solid rgba(120, 170, 255, 0.3);
   border-radius: 14px;
