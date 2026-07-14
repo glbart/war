@@ -3,7 +3,15 @@ import type { Surface, Biome } from './material';
 
 // События, которые симуляция эмитит наружу (для рендера/UI/сети).
 export type SimEvent =
-  | { kind: 'missileLaunched'; id: number; dir: Vec3; yield: number }
+  // from — точка старта баллистической МБР (нет — удар из космоса); flightTime — сек до детонации
+  | {
+      kind: 'missileLaunched';
+      id: number;
+      dir: Vec3;
+      yield: number;
+      flightTime: number;
+      from?: Vec3;
+    }
   | {
       kind: 'explosionStarted';
       id: number;

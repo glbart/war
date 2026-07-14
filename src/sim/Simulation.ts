@@ -5,8 +5,10 @@ import { computeCasualties } from '../ecs/systems/CasualtySystem';
 import { createCities, type City } from './cities';
 import type { Command } from './commands';
 import type { SimEvent } from './events';
-import { YIELDS, type Yield } from '../assets/config';
+import { YIELDS, SALVO_COUNT, type Yield } from '../assets/config';
 import { materialAtDir } from './material';
+import { angleBetween, type Vec3 } from './geo';
+import { flightTimeFor } from './ballistics';
 
 // Время полёта боеголовки до детонации, сек (порт таймингов демо).
 const FLIGHT_TIME = 2.6;
@@ -83,9 +85,18 @@ export class Simulation {
           },
         });
         this.ids.set(entity, id);
-        events.push({ kind: 'missileLaunched', id, dir: cmd.dir, yield: cmd.yield });
+        events.push({
+          kind: 'missileLaunched',
+          id,
+          dir: cmd.dir,
+          yield: cmd.yield,
+          flightTime: FLIGHT_TIME,
+        });
         break;
       }
+      case 'salvo':
+        this.applySalvo(events);
+        break;
       case 'setYield':
         assertValidYield(cmd.yield);
         this.currentYield = cmd.yield;
@@ -97,6 +108,55 @@ export class Simulation {
         this.labelsEnabled = !this.labelsEnabled;
         events.push({ kind: 'labelsToggled', enabled: this.labelsEnabled });
         break;
+    }
+  }
+
+  // Случайная точка на суше: rejection sampling равномерных направлений по landmask
+  // (детерминированно через Rng). Фолбэк после лимита попыток — последняя точка как есть
+  // (реалистично суша находится за 2-3 попытки: её ~29%).
+  private randomLandDir(): Vec3 {
+    let dir: Vec3 = { x: 1, y: 0, z: 0 };
+    for (let i = 0; i < 40; i++) {
+      const az = this.rng.range(0, Math.PI * 2);
+      const cz = this.rng.range(-1, 1);
+      const sxy = Math.sqrt(Math.max(0, 1 - cz * cz));
+      dir = { x: sxy * Math.cos(az), y: sxy * Math.sin(az), z: cz };
+      if (materialAtDir(dir).surface !== 'water') return dir;
+    }
+    return dir;
+  }
+
+  // Залп МБР (спека 2026-07-14): SALVO_COUNT ракет из случайных точек суши по случайным
+  // ЖИВЫМ городам (жертвы и лента работают); городов не осталось — по случайным точкам суши.
+  // Мощность — текущая выбранная (setYield). Время полёта — от дальности (ballistics).
+  private applySalvo(events: SimEvent[]): void {
+    assertValidYield(this.currentYield);
+    const alive = this.cities.filter((c) => c.alive > 0);
+    for (let i = 0; i < SALVO_COUNT; i++) {
+      const from = this.randomLandDir();
+      const target =
+        alive.length > 0 ? alive[this.rng.int(alive.length)]!.dir : this.randomLandDir();
+      const flightTime = flightTimeFor(angleBetween(from, target));
+      const id = this.nextId++;
+      const entity = this.world.add({
+        warhead: {
+          yield: this.currentYield,
+          seed: this.rng.int(1_000_000_000),
+          t: 0,
+          flightTime,
+          dir: target,
+          from,
+        },
+      });
+      this.ids.set(entity, id);
+      events.push({
+        kind: 'missileLaunched',
+        id,
+        dir: target,
+        yield: this.currentYield,
+        flightTime,
+        from,
+      });
     }
   }
 

@@ -106,7 +106,7 @@ export class Scene {
     switch (event.kind) {
       case 'missileLaunched':
         if (this.shatter.phase === 'shattered') break; // планеты нет — удары в пустоту глушим
-        this.missileView.spawn(event.id, event.dir, event.yield);
+        this.missileView.spawn(event.id, event.dir, event.yield, event.flightTime, event.from);
         break;
       case 'explosionStarted':
         this.missileView.despawn(event.id); // ракеты, выпущенные до раскола, убираются штатно
