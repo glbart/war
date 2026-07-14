@@ -24,7 +24,8 @@ import { Crust, crackStrengthForDepth } from '../crust/Crust';
 import { CrustView } from './CrustView';
 import { MagmaCore } from './MagmaCore';
 import type { HoleMask } from './HoleMask';
-import { playBoom } from './effects/sound';
+import { ShatterState } from './shatterState';
+import { playBoom, playShatter } from './effects/sound';
 import {
   WATER_SPLAT_STRENGTH,
   WATER_SPLAT_RADIUS,
@@ -52,6 +53,7 @@ export class Scene {
   private readonly crustView: CrustView;
   private readonly magma: MagmaCore;
   private clock = 0; // общие часы рендера (секунды); база спавна частиц и uTime шейдера
+  private readonly shatter = new ShatterState(); // раскол планеты (этап 4)
   private readonly globe: GlobeView; // нужен полем: часы пульса трещин (globe.setTime в update)
 
   // ctx/host не сохраняются полями — используются только здесь, при постройке владений
@@ -100,10 +102,12 @@ export class Scene {
   private handleEvent(event: SimEvent): void {
     switch (event.kind) {
       case 'missileLaunched':
+        if (this.shatter.phase === 'shattered') break; // планеты нет — удары в пустоту глушим
         this.missileView.spawn(event.id, event.dir, event.yield);
         break;
       case 'explosionStarted':
-        this.missileView.despawn(event.id);
+        this.missileView.despawn(event.id); // ракеты, выпущенные до раскола, убираются штатно
+        if (this.shatter.phase === 'shattered') break;
         this.startExplosion(event.dir, event.yield, event.seed, event.surface, event.biome);
         break;
       case 'planetReset':
@@ -114,6 +118,8 @@ export class Scene {
         this.crustView.clear();
         this.holeMask.clear();
         this.debrisView.clear();
+        this.shatter.reset();
+        this.applyShatterVisuals(true);
         break;
       default:
         break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
@@ -167,6 +173,11 @@ export class Scene {
         const l = landings[i];
         if (l) this.ejectaView.emitPuff(l.dir, l.at, seed + i * 7 + 1);
       }
+      // Финал (этап 4): нулевая целостность запускает агонию раскола (однократно).
+      if (this.crust.integrity() <= 0 && this.shatter.phase === 'intact') {
+        this.shatter.trigger();
+        playShatter(0.7);
+      }
     }
     playBoom(yieldMt);
   }
@@ -202,10 +213,38 @@ export class Scene {
     this.magma.setTime(this.clock);
     this.globe.setTime(this.clock);
     this.crustView.setTime(this.clock);
+
+    // Раскол (этап 4): тик агонии, буст трещин/магмы, тряска; переход — прячем планету
+    // и спавним рой осколков.
+    const ev = this.shatter.update(dt);
+    const boost = this.shatter.boost;
+    this.globe.setCrackBoost(boost);
+    this.crustView.setCrackBoost(boost);
+    this.magma.setBoost(boost);
+    if (this.shatter.phase === 'agony') this.rig.shake = Math.max(this.rig.shake, 0.05 * boost);
+    if (ev === 'shatter') {
+      this.applyShatterVisuals(false);
+      this.debrisView.emitShatter(1337, this.clock);
+      playShatter(1.6);
+      this.rig.shake = Math.max(this.rig.shake, 0.12);
+    }
+  }
+
+  // Видимость «планеты как целого»: глобус+атмосфера, океан, воксельные чанки.
+  // false — раскол (остаются магма-ядро и осколки), true — восстановление.
+  private applyShatterVisuals(visible: boolean): void {
+    this.globe.setPlanetVisible(visible);
+    this.oceanShell.mesh.visible = visible;
+    this.crustView.setVisible(visible);
   }
 
   // Целостность коры [0..1] — для HUD (main.ts опрашивает раз за кадр).
   get crustIntegrity(): number {
     return this.crust.integrity();
+  }
+
+  // Планета расколота? — для HUD-баннера и скрытия слоя тайлов (main.ts, раз за кадр).
+  get isShattered(): boolean {
+    return this.shatter.phase === 'shattered';
   }
 }
