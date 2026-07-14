@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { Crust, MAT_EMPTY, MAT_WATER, carveMaskRadius } from '../../src/crust/Crust';
+import {
+  Crust,
+  MAT_EMPTY,
+  MAT_WATER,
+  carveMaskRadius,
+  crackStrengthForDepth,
+} from '../../src/crust/Crust';
 import { dot, lonLatToDir } from '../../src/sim/geo';
 import { dirToFaceUV, type FaceId } from '../../src/crust/cubesphere';
-import { CRUST_FACE_N, CRUST_CHUNK } from '../../src/assets/config';
+import { CRUST_FACE_N, CRUST_CHUNK, CRUST_DOOM_VOXELS } from '../../src/assets/config';
 
 const deg = (x: number) => (x * Math.PI) / 180;
 const SAHARA = lonLatToDir(deg(20), deg(23));
@@ -140,5 +146,30 @@ describe('Crust.carve', () => {
   it('removedByMat нулевой при ударе по океану', () => {
     const res = new Crust().carve(PACIFIC, 0.046, 5, 42);
     expect(res.removedByMat).toEqual({ soil: 0, rock: 0, basalt: 0 });
+  });
+
+  it('deepestLayer: глубокий удар достаёт базальт, мелкий — нет, океан — −1', () => {
+    expect(new Crust().carve(SAHARA, 0.046, 5, 42).deepestLayer).toBeGreaterThanOrEqual(5);
+    const shallow = new Crust().carve(SAHARA, 0.009, 1, 42).deepestLayer;
+    expect(shallow).toBeGreaterThanOrEqual(0);
+    expect(shallow).toBeLessThan(5);
+    expect(new Crust().carve(PACIFIC, 0.046, 5, 42).deepestLayer).toBe(-1);
+  });
+
+  it('integrity: 1 у свежей коры, падает ровно на removed/бюджет, reset возвращает 1', () => {
+    const crust = new Crust();
+    expect(crust.integrity()).toBe(1);
+    const res = crust.carve(SAHARA, 0.046, 5, 42);
+    expect(crust.integrity()).toBeCloseTo(1 - res.removed / CRUST_DOOM_VOXELS, 10);
+    crust.reset();
+    expect(crust.integrity()).toBe(1);
+  });
+
+  it('crackStrengthForDepth: 0 до базальта, растёт с глубиной до 1', () => {
+    expect(crackStrengthForDepth(-1)).toBe(0);
+    expect(crackStrengthForDepth(4)).toBe(0);
+    expect(crackStrengthForDepth(5)).toBeCloseTo(1 / 3, 10);
+    expect(crackStrengthForDepth(7)).toBe(1);
+    expect(crackStrengthForDepth(99)).toBe(1);
   });
 });
