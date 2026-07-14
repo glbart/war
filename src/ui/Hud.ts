@@ -59,6 +59,7 @@ export class Hud {
         <button data-yield="10" class="active">10 Мт</button>
         <button data-yield="100">100 Мт</button>
       </div>
+      <button id="salvo" style="width: 100%; margin-bottom: 8px">☢ Залп МБР</button>
       <button id="reset">Восстановить планету</button>
       <button id="labels" class="active" style="width: 100%; margin-top: 8px">Границы и названия: вкл</button>
       <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар</p>
@@ -80,6 +81,10 @@ export class Hud {
       btn.addEventListener('click', () => this.selectYield(btn));
     }
     resetBtn.addEventListener('click', () => this.host.post({ kind: 'reset' }));
+    // Залп МБР: из случайных точек суши по случайным живым городам (текущая мощность) —
+    // маршрутизацию и детерминизм решает симуляция (см. Simulation.applySalvo).
+    const salvoBtn = root.querySelector<HTMLButtonElement>('#salvo')!;
+    salvoBtn.addEventListener('click', () => this.host.post({ kind: 'salvo' }));
     // Подпись/активность кнопки границ обновляется только по факту labelsToggled от sim —
     // сам клик не трогает DOM сразу (см. onEvent), чтобы UI всегда отражал состояние sim.
     this.labelsBtn.addEventListener('click', () => this.host.post({ kind: 'toggleLabels' }));

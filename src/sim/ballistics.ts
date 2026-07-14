@@ -49,8 +49,36 @@ export function easeBallistic(k: number): number {
 // Позиция боеголовки в момент k∈[0,1] нормированного времени полёта from→to
 // (единичные направления). Высота — синус-дуга с апогеем apexFor(дальность) в середине.
 export function ballisticPos(from: Vec3, to: Vec3, k: number): Vec3 {
+  return ballisticPosInto(from, to, k, { x: 0, y: 0, z: 0 });
+}
+
+// То же, но пишет в out БЕЗ аллокаций (slerp развёрнут инлайн) — для рендера, который
+// вызывает это каждый кадр на каждую ракету. Поведение зеркалит ballisticPos (юнит-тест).
+export function ballisticPosInto(from: Vec3, to: Vec3, k: number, out: Vec3): Vec3 {
   const e = easeBallistic(k);
-  const p = slerp3(from, to, e);
-  const h = 1 + apexFor(angleBetween(from, to)) * Math.sin(Math.PI * e);
-  return { x: p.x * h, y: p.y * h, z: p.z * h };
+  const ang = angleBetween(from, to);
+  const s = Math.sin(ang);
+  let px: number;
+  let py: number;
+  let pz: number;
+  if (s < 1e-6) {
+    px = from.x + (to.x - from.x) * e;
+    py = from.y + (to.y - from.y) * e;
+    pz = from.z + (to.z - from.z) * e;
+    const l = Math.hypot(px, py, pz) || 1;
+    px /= l;
+    py /= l;
+    pz /= l;
+  } else {
+    const ka = Math.sin((1 - e) * ang) / s;
+    const kb = Math.sin(e * ang) / s;
+    px = from.x * ka + to.x * kb;
+    py = from.y * ka + to.y * kb;
+    pz = from.z * ka + to.z * kb;
+  }
+  const h = 1 + apexFor(ang) * Math.sin(Math.PI * e);
+  out.x = px * h;
+  out.y = py * h;
+  out.z = pz * h;
+  return out;
 }

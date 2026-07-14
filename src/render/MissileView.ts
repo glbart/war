@@ -5,6 +5,7 @@
 import type * as THREE from 'three/webgpu';
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
+import { ballisticPosInto } from '../sim/ballistics';
 import { findFreeSlotIndex } from './SlotPool';
 
 // 16, а не 8: при flightTime=2.6с и отсутствии дебаунса ввода/лимита боеголовок в симуляции
@@ -12,7 +13,6 @@ import { findFreeSlotIndex } from './SlotPool';
 // дешёвый способ сделать исчерпание пула практически недостижимым при обычной игре, оставляя
 // graceful no-op (см. spawn()) как страховку на случай экстремального спама.
 const POOL_SIZE = 16;
-const FLIGHT_TIME = 2.6; // должно совпадать с FLIGHT_TIME в src/sim/Simulation.ts
 const START_RADIUS = 2.6;
 const END_RADIUS = 1.0;
 const MODEL_SPIN_SPEED = 1.5; // рад/с вращения корпуса вокруг собственной оси
@@ -25,6 +25,12 @@ interface MissileSlot {
   readonly flame: THREE.Mesh; // факел двигателя (дрожание масштаба по Y)
   readonly dir: THREE.Vector3; // переиспользуемый вектор направления — без аллокаций в update
   readonly center: THREE.Vector3; // переиспользуемый вектор-скрэтч для lookAt
+  // Баллистический режим (спека 2026-07-14): plain-векторы под ballisticPosInto — без аллокаций.
+  readonly fromP: Vec3;
+  readonly toP: Vec3;
+  readonly posP: Vec3;
+  ballistic: boolean; // false — прежний «удар из космоса» (радиальный спуск)
+  flightTime: number; // сек; приходит из события missileLaunched (sim авторитетен)
   active: boolean;
   id: number;
   yieldMt: number;
@@ -55,6 +61,11 @@ export class MissileView {
       flame,
       dir: new THREE.Vector3(),
       center: new THREE.Vector3(),
+      fromP: { x: 0, y: 0, z: 0 },
+      toP: { x: 0, y: 0, z: 0 },
+      posP: { x: 0, y: 0, z: 0 },
+      ballistic: false,
+      flightTime: 2.6,
       active: false,
       id: -1,
       yieldMt: 0,
@@ -143,7 +154,10 @@ export class MissileView {
   // таймеру (despawn() на explosionStarted просто не найдёт слот с этим id — а он и не найдёт
   // ни у кого чужого, т.к. слот не был украден); в редком экстремальном спаме одна ракета
   // визуально не появится, но ничего не ломается и не пропадает "неправильно".
-  spawn(id: number, dir: Vec3, yieldMt: number): void {
+  // from — точка старта на поверхности: задана → баллистическая дуга (МБР), нет → прежний
+  // «удар из космоса». flightTime приходит из события missileLaunched (sim авторитетен —
+  // хардкод-дубль константы 2.6 из рендера устранён).
+  spawn(id: number, dir: Vec3, yieldMt: number, flightTime: number, from?: Vec3): void {
     const slot = this.acquireSlot();
     if (!slot) {
       if (!this.poolExhaustedWarned) {
@@ -159,13 +173,28 @@ export class MissileView {
     slot.id = id;
     slot.yieldMt = yieldMt;
     slot.t = 0;
+    slot.flightTime = flightTime;
+    slot.ballistic = !!from;
     slot.dir.set(dir.x, dir.y, dir.z);
     slot.model.rotation.z = 0;
     slot.flame.scale.y = 1;
 
-    slot.group.position.copy(slot.dir).multiplyScalar(START_RADIUS);
-    slot.center.set(0, 0, 0);
-    slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+    if (from) {
+      slot.fromP.x = from.x;
+      slot.fromP.y = from.y;
+      slot.fromP.z = from.z;
+      slot.toP.x = dir.x;
+      slot.toP.y = dir.y;
+      slot.toP.z = dir.z;
+      slot.group.position.set(from.x, from.y, from.z);
+      // Нос — вертикально вверх со старта (буст); по траектории развернёт первый update.
+      slot.center.set(from.x * 2, from.y * 2, from.z * 2);
+      slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+    } else {
+      slot.group.position.copy(slot.dir).multiplyScalar(START_RADIUS);
+      slot.center.set(0, 0, 0);
+      slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+    }
     slot.group.visible = true;
   }
 
@@ -181,20 +210,32 @@ export class MissileView {
     }
   }
 
-  // Двигает активные снаряды по дуге radius 2.6→1.0 (по k*k — разгон к поверхности),
-  // держит нос по направлению полёта (lookAt центра) и крутит корпус/дрожит факелом.
-  // Локальный таймер — запасной путь скрытия слота на случай, если explosionStarted
-  // не пришёл вовремя (рассинхрон таймингов); при штатной работе despawn() срабатывает раньше.
+  // Двигает активные снаряды: «из космоса» — радиальный спуск 2.6→1.0 (по k*k — разгон к
+  // поверхности), баллистические — дуга ballisticPosInto (slerp+апогей, нос по касательной:
+  // lookAt точки чуть впереди по траектории). Крутит корпус/дрожит факелом. Локальный таймер —
+  // запасной путь скрытия слота на случай, если explosionStarted не пришёл вовремя
+  // (рассинхрон таймингов); при штатной работе despawn() срабатывает раньше.
   update(dt: number): void {
     for (const slot of this.slots) {
       if (!slot.active) continue;
 
       slot.t += dt;
-      const k = Math.min(1, slot.t / FLIGHT_TIME);
-      const dist = START_RADIUS - (START_RADIUS - END_RADIUS) * k * k;
-      slot.group.position.copy(slot.dir).multiplyScalar(dist);
-      slot.center.set(0, 0, 0);
-      slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+      const k = Math.min(1, slot.t / slot.flightTime);
+      if (slot.ballistic) {
+        ballisticPosInto(slot.fromP, slot.toP, k, slot.posP);
+        slot.group.position.set(slot.posP.x, slot.posP.y, slot.posP.z);
+        const ka = Math.min(1, k + 0.02);
+        if (ka > k) {
+          ballisticPosInto(slot.fromP, slot.toP, ka, slot.posP);
+          slot.center.set(slot.posP.x, slot.posP.y, slot.posP.z);
+          slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+        }
+      } else {
+        const dist = START_RADIUS - (START_RADIUS - END_RADIUS) * k * k;
+        slot.group.position.copy(slot.dir).multiplyScalar(dist);
+        slot.center.set(0, 0, 0);
+        slot.group.lookAt(this.spinGroup.localToWorld(slot.center));
+      }
       slot.model.rotation.z += dt * MODEL_SPIN_SPEED;
       slot.flame.scale.y = FLAME_BASE_SCALE + Math.random() * FLAME_JITTER;
 

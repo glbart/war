@@ -40,9 +40,7 @@ describe('Simulation: залп МБР', () => {
 
   it('ручной detonate остаётся ударом из космоса: без from, прежний тайминг', () => {
     const sim = new Simulation(1);
-    const events = sim.step(TICK_DT, [
-      { kind: 'detonate', dir: { x: 0, y: 0, z: 1 }, yield: 10 },
-    ]);
+    const events = sim.step(TICK_DT, [{ kind: 'detonate', dir: { x: 0, y: 0, z: 1 }, yield: 10 }]);
     const l = events.find((e) => e.kind === 'missileLaunched');
     expect(l && l.kind === 'missileLaunched' ? l.from : 'нет события').toBeUndefined();
     expect(l && l.kind === 'missileLaunched' ? l.flightTime : 0).toBeCloseTo(2.6, 6);

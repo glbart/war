@@ -4,6 +4,7 @@ import {
   apexFor,
   flightTimeFor,
   ballisticPos,
+  ballisticPosInto,
   easeBallistic,
 } from '../../src/sim/ballistics';
 import { angleBetween, lonLatToDir, type Vec3 } from '../../src/sim/geo';
@@ -51,6 +52,20 @@ describe('ballisticPos', () => {
     expect(p.x).toBeCloseTo(A.x, 6);
     expect(p.y).toBeCloseTo(A.y, 6);
     expect(p.z).toBeCloseTo(A.z, 6);
+  });
+});
+
+describe('ballisticPosInto', () => {
+  it('зеркалит ballisticPos на всём диапазоне k', () => {
+    const out = { x: 0, y: 0, z: 0 };
+    for (let k = 0; k <= 1.0001; k += 0.1) {
+      const kk = Math.min(1, k);
+      const a = ballisticPos(A, B, kk);
+      ballisticPosInto(A, B, kk, out);
+      expect(out.x).toBeCloseTo(a.x, 10);
+      expect(out.y).toBeCloseTo(a.y, 10);
+      expect(out.z).toBeCloseTo(a.z, 10);
+    }
   });
 });
 
