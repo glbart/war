@@ -176,3 +176,11 @@ export const SHATTER_PLATE_SPEED_MIN = 0.05; // скорость разлёта 
 export const SHATTER_PLATE_SPEED_MAX = 0.12;
 export const SHATTER_PLATE_RAMP_T = 6; // сек разгона от нуля («замедленный режим»)
 export const SHATTER_PLATE_SPIN_MAX = 0.25; // рад/с — максимум медленного кувыркания куска
+// Распад ядра (ревизия спеки §6): от планеты не остаётся ничего.
+export const SHATTER_CORE_LINGER_T = 7; // сек после раскола до распада ядра (куски отходят)
+export const SHATTER_CORE_COLLAPSE_T = 2.2; // сек вспышки и схлопывания ядра
+export const SHATTER_ESCAPE_COUNT = 200; // обломков финального разлёта прочь
+export const SHATTER_ESCAPE_R_MIN = 6; // «орбиты» разлёта — за секунды уходят из вида
+export const SHATTER_ESCAPE_R_MAX = 14;
+export const SHATTER_ESCAPE_SIZE_MIN = 0.01;
+export const SHATTER_ESCAPE_SIZE_MAX = 0.05;
