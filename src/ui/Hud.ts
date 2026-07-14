@@ -30,6 +30,8 @@ export class Hud {
   private readonly bombsEl: HTMLElement;
   private readonly megatonsEl: HTMLElement;
   private readonly deathsEl: HTMLElement;
+  private readonly integrityEl: HTMLElement;
+  private lastIntegrityPct = 100; // кэш выведенного процента — DOM трогаем только при смене
   private readonly feedEl: HTMLElement;
   private readonly labelsBtn: HTMLButtonElement;
   private readonly yieldButtons: HTMLButtonElement[];
@@ -47,7 +49,7 @@ export class Hud {
     root.id = 'ui';
     root.innerHTML = `
       <h1>☢ ЯДЕРНАЯ ПЕСОЧНИЦА</h1>
-      <div id="stats">Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b></div>
+      <div id="stats">Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
       <div id="feed"></div>
       <div class="row">
         <button data-yield="1">1 Мт</button>
@@ -64,6 +66,7 @@ export class Hud {
     this.bombsEl = root.querySelector<HTMLElement>('#bombs')!;
     this.megatonsEl = root.querySelector<HTMLElement>('#megatons')!;
     this.deathsEl = root.querySelector<HTMLElement>('#deaths')!;
+    this.integrityEl = root.querySelector<HTMLElement>('#integrity')!;
     this.feedEl = root.querySelector<HTMLElement>('#feed')!;
     this.labelsBtn = root.querySelector<HTMLButtonElement>('#labels')!;
     const resetBtn = root.querySelector<HTMLButtonElement>('#reset')!;
@@ -88,6 +91,16 @@ export class Hud {
     this._currentYield = y;
     for (const btn of this.yieldButtons) btn.classList.toggle('active', btn === selected);
     this.host.post({ kind: 'setYield', yield: y });
+  }
+
+  // Целостность коры (0..1) — опрашивается main.ts раз за кадр; DOM трогаем только при
+  // смене целого процента. Пороги окраски: <70% жёлтый, <35% красный (задел этапа 4).
+  setIntegrity(v: number): void {
+    const pct = Math.round(v * 100);
+    if (pct === this.lastIntegrityPct) return;
+    this.lastIntegrityPct = pct;
+    this.integrityEl.textContent = `${pct}%`;
+    this.integrityEl.style.color = pct < 35 ? '#ff5544' : pct < 70 ? '#ffcc44' : '';
   }
 
   // Разбирает событие симуляции (уже слитое main.ts через host.drainEvents() и розданное

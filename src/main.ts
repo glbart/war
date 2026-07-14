@@ -104,6 +104,7 @@ async function boot() {
       }
 
       scene.update(frame);
+      hud.setIntegrity(scene.crustIntegrity);
       rig.update(frame, pointer.isDown);
       tileAcc += frame;
       if (tileAcc >= TILE_UPDATE_INTERVAL) {

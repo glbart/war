@@ -85,10 +85,7 @@ export class GlobeView {
     earthMaterial.colorNode = mix(withIceRim, vec3(0.05, 0.12, 0.2), openWater);
 
     // Светящиеся трещины глубоких очагов (R поля урона) — эмиссивно, поверх гари (этап 3).
-    setEmissiveNode(
-      earthMaterial,
-      crackEmissiveNode(dmg.r, normalize(positionLocal), this.uTime),
-    );
+    setEmissiveNode(earthMaterial, crackEmissiveNode(dmg.r, normalize(positionLocal), this.uTime));
 
     // Дырки коры: там, где HoleMask=1, фрагмент глобуса отбрасывается (регион рисует CrustView).
     // alphaTest-путь node-материалов делает discard без transparent-прохода.
