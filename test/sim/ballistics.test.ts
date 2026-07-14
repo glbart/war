@@ -7,7 +7,11 @@ import {
   easeBallistic,
 } from '../../src/sim/ballistics';
 import { angleBetween, lonLatToDir, type Vec3 } from '../../src/sim/geo';
-import { BALLISTIC_TIME_MIN, BALLISTIC_APEX_MIN } from '../../src/assets/config';
+import {
+  BALLISTIC_TIME_MIN,
+  BALLISTIC_APEX_MIN,
+  BALLISTIC_EASE_POW,
+} from '../../src/assets/config';
 
 const len = (v: Vec3) => Math.hypot(v.x, v.y, v.z);
 const A = lonLatToDir(0.3, 0.9);
@@ -37,7 +41,9 @@ describe('ballisticPos', () => {
     expect(len(ballisticPos(A, B, 0))).toBeCloseTo(1, 6);
     expect(len(ballisticPos(A, B, 1))).toBeCloseTo(1, 6);
     const apex = apexFor(angleBetween(A, B));
-    expect(len(ballisticPos(A, B, 0.5))).toBeCloseTo(1 + apex, 6);
+    // апогей — на середине ДУГИ (e=0.5), то есть при k = 0.5^(1/POW) из-за ease-разгона
+    const kApex = 0.5 ** (1 / BALLISTIC_EASE_POW);
+    expect(len(ballisticPos(A, B, kApex))).toBeCloseTo(1 + apex, 6);
   });
 
   it('k=0 — точно точка старта', () => {
