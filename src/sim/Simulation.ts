@@ -4,14 +4,23 @@ import type { Entity } from '../ecs/components';
 import { computeCasualties } from '../ecs/systems/CasualtySystem';
 import { createCities, type City } from './cities';
 import type { Command } from './commands';
-import type { SimEvent } from './events';
-import { YIELDS, SALVO_COUNT, type Yield } from '../assets/config';
+import type { SimEvent, FactionStat } from './events';
+import { YIELDS, SALVO_COUNT, FACTION_LAUNCH_JITTER, type Yield } from '../assets/config';
 import { materialAtDir } from './material';
-import { angleBetween, type Vec3 } from './geo';
+import { angleBetween, jitterDir, type Vec3 } from './geo';
 import { flightTimeFor } from './ballistics';
+import { FACTIONS, BELLIGERENTS, isFactionId, type FactionId } from './factions';
 
 // Время полёта боеголовки до детонации, сек (порт таймингов демо).
 const FLIGHT_TIME = 2.6;
+
+// Порог «город ещё жив» — тот же, по которому CasualtySystem пропускает опустошённые города.
+const ALIVE_EPS = 0.001;
+
+// Сколько раз пробуем найти сушу под пусковую площадку рядом с городом, прежде чем уйти
+// в общий фолбэк (случайная точка суши): города прибрежные, грубая landmask вокруг них
+// местами вода — упереться в лимит нормально, зависнуть нельзя.
+const LAUNCH_SITE_TRIES = 8;
 
 // Мощности заряда, поддерживаемые демо (мегатонны).
 type YieldMt = Yield;
@@ -31,6 +40,15 @@ function assertValidYield(y: number): asserts y is Yield {
     throw new Error(
       `Недопустимая мощность заряда: ${y}. Разрешены только значения ${YIELDS.join(', ')} Мт.`,
     );
+  }
+}
+
+// Runtime-проверка стороны на границе применения команд — по тем же мотивам, что и
+// assertValidYield: id может прийти из будущего сетевого слоя произвольным, а неизвестная
+// сторона иначе молча выродилась бы в «пускать некому» (залп без видимой причины не идёт).
+function assertValidFaction(id: FactionId | undefined): void {
+  if (id !== undefined && !isFactionId(id)) {
+    throw new Error(`Неизвестная сторона: ${String(id)}.`);
   }
 }
 
@@ -54,16 +72,33 @@ export class Simulation {
   private bombs = 0;
   private megatons = 0;
   private totalDeaths = 0;
+  // Арсеналы сторон (спека 2026-08-29): тратятся по боеголовке на ракету залпа,
+  // восстанавливаются на reset. Нейтральные держат 0 и агрессором не выбираются.
+  private arsenals = new Map<FactionId, number>();
+  private bootstrapped = false; // выдан ли стартовый factionsChanged (первый тик)
 
   constructor(seed: number) {
     this.rng = new Rng(seed);
     this.cities = createCities();
+    this.resetArsenals();
+  }
+
+  private resetArsenals(): void {
+    this.arsenals = new Map(FACTIONS.map((f) => [f.id, f.arsenal]));
   }
 
   // Продвигает симуляцию на dt секунд, применяя команды этого тика; возвращает
   // все события, произошедшие за тик (в порядке: команды, затем взрывы).
   step(dt: number, commands: Command[]): SimEvent[] {
     const events: SimEvent[] = [];
+
+    // Стартовый снимок сторон — первым событием первого тика: HUD получает население и
+    // арсеналы тем же путём, что и все дальнейшие изменения, без отдельного «начального
+    // состояния» на его стороне (симуляция остаётся единственным источником истины).
+    if (!this.bootstrapped) {
+      this.bootstrapped = true;
+      events.push(this.factionsEvent());
+    }
 
     for (const cmd of commands) this.applyCommand(cmd, events);
     this.runMissiles(dt, events);
@@ -96,7 +131,7 @@ export class Simulation {
         break;
       }
       case 'salvo':
-        this.applySalvo(events);
+        this.applySalvo(cmd.from, cmd.to, events);
         break;
       case 'setYield':
         assertValidYield(cmd.yield);
@@ -127,17 +162,78 @@ export class Simulation {
     return dir;
   }
 
-  // Залп МБР (спека 2026-07-14): SALVO_COUNT ракет из случайных точек суши по случайным
-  // ЖИВЫМ городам (жертвы и лента работают); городов не осталось — по случайным точкам суши.
-  // Мощность — текущая выбранная (setYield). Время полёта — от дальности (ballistics).
-  private applySalvo(events: SimEvent[]): void {
+  // Живые города стороны — и цели для удара, и её пусковые площадки.
+  private citiesOf(id: FactionId): City[] {
+    return this.cities.filter((c) => c.faction === id && c.alive > ALIVE_EPS);
+  }
+
+  // Сторона может пускать, если есть боеголовки И есть живой город: пусковые площадки —
+  // это её территория, обезглавленная страна арсенал уже не применит (отдельного флага
+  // «уничтожена» нет — это следствие, а не состояние).
+  private canLaunch(id: FactionId): boolean {
+    return (this.arsenals.get(id) ?? 0) > 0 && this.citiesOf(id).length > 0;
+  }
+
+  // Агрессор: заданный командой (если способен пускать — подменять чужой выбор молча нельзя),
+  // иначе случайная способная сторона; некому — undefined, залп не состоится.
+  private pickAttacker(pref?: FactionId): FactionId | undefined {
+    if (pref !== undefined) return this.canLaunch(pref) ? pref : undefined;
+    const able = BELLIGERENTS.filter((f) => this.canLaunch(f.id));
+    return able.length > 0 ? able[this.rng.int(able.length)]!.id : undefined;
+  }
+
+  // Цели: живые города заданной стороны; если она задана, но целей у неё нет (или сторона
+  // не задана) — случайная ДРУГАЯ воюющая сторона с живыми городами; нет и таких — любые
+  // живые города (включая нейтральные); совсем никого — пустой список (фолбэк на точки суши).
+  private pickTargets(attacker: FactionId, pref?: FactionId): City[] {
+    if (pref !== undefined) {
+      const wanted = this.citiesOf(pref);
+      if (wanted.length > 0) return wanted;
+    }
+    const enemies = BELLIGERENTS.filter((f) => f.id !== attacker && this.citiesOf(f.id).length > 0);
+    if (enemies.length > 0) return this.citiesOf(enemies[this.rng.int(enemies.length)]!.id);
+    return this.cities.filter((c) => c.alive > ALIVE_EPS);
+  }
+
+  // Пусковая площадка: точка суши в пределах FACTION_LAUNCH_JITTER от города (ракеты стартуют
+  // с территории страны, а не из центра мегаполиса). Вокруг прибрежного города суши может
+  // не найтись — тогда общий фолбэк на случайную точку суши, чтобы старт не оказался в море.
+  private launchSiteNear(city: Vec3): Vec3 {
+    for (let i = 0; i < LAUNCH_SITE_TRIES; i++) {
+      const dir = jitterDir(
+        city,
+        this.rng.range(0, FACTION_LAUNCH_JITTER),
+        this.rng.range(0, Math.PI * 2),
+      );
+      if (materialAtDir(dir).surface !== 'water') return dir;
+    }
+    return this.randomLandDir();
+  }
+
+  // Залп МБР (спека 2026-08-29, развитие спеки 2026-07-14): сторона-агрессор пускает
+  // min(SALVO_COUNT, арсенал) ракет со своей территории по живым городам стороны-цели,
+  // тратя боеголовки. Мощность — текущая выбранная (setYield); время полёта — от дальности.
+  private applySalvo(
+    from: FactionId | undefined,
+    to: FactionId | undefined,
+    events: SimEvent[],
+  ): void {
     assertValidYield(this.currentYield);
-    const alive = this.cities.filter((c) => c.alive > 0);
-    for (let i = 0; i < SALVO_COUNT; i++) {
-      const from = this.randomLandDir();
+    assertValidFaction(from);
+    assertValidFaction(to);
+    const attacker = this.pickAttacker(from);
+    if (attacker === undefined) return; // пускать некому — молчаливый no-op (HUD гасит кнопку)
+
+    const sites = this.citiesOf(attacker);
+    const targets = this.pickTargets(attacker, to);
+    const count = Math.min(SALVO_COUNT, this.arsenals.get(attacker) ?? 0);
+
+    for (let i = 0; i < count; i++) {
+      const site = sites[this.rng.int(sites.length)]!;
+      const launch = this.launchSiteNear(site.dir);
       const target =
-        alive.length > 0 ? alive[this.rng.int(alive.length)]!.dir : this.randomLandDir();
-      const flightTime = flightTimeFor(angleBetween(from, target));
+        targets.length > 0 ? targets[this.rng.int(targets.length)]!.dir : this.randomLandDir();
+      const flightTime = flightTimeFor(angleBetween(launch, target));
       const id = this.nextId++;
       const entity = this.world.add({
         warhead: {
@@ -146,7 +242,7 @@ export class Simulation {
           t: 0,
           flightTime,
           dir: target,
-          from,
+          from: launch,
         },
       });
       this.ids.set(entity, id);
@@ -156,20 +252,44 @@ export class Simulation {
         dir: target,
         yield: this.currentYield,
         flightTime,
-        from,
+        from: launch,
+        faction: attacker,
       });
     }
+
+    this.arsenals.set(attacker, (this.arsenals.get(attacker) ?? 0) - count);
+    events.push(this.factionsEvent());
+  }
+
+  // Снимок изменяемого состояния сторон для HUD (статику он берёт из sim/factions.ts).
+  private factionsEvent(): SimEvent {
+    const stats: FactionStat[] = FACTIONS.map((f) => ({
+      id: f.id,
+      popAlive: 0,
+      citiesAlive: 0,
+      arsenal: this.arsenals.get(f.id) ?? 0,
+    }));
+    const byId = new Map(stats.map((s) => [s.id, s]));
+    for (const c of this.cities) {
+      const s = byId.get(c.faction);
+      if (!s) continue;
+      s.popAlive += Math.max(0, c.alive);
+      if (c.alive > ALIVE_EPS) s.citiesAlive += 1;
+    }
+    return { kind: 'factionsChanged', factions: stats };
   }
 
   private applyReset(events: SimEvent[]): void {
     // Убираем боеголовки в полёте и воскрешаем города.
     for (const entity of [...this.world.with('warhead')]) this.world.remove(entity);
     this.cities = createCities();
+    this.resetArsenals();
     this.bombs = 0;
     this.megatons = 0;
     this.totalDeaths = 0;
     events.push({ kind: 'planetReset' });
     events.push({ kind: 'statsChanged', bombs: 0, megatons: 0, deaths: 0 });
+    events.push(this.factionsEvent());
   }
 
   // Продвигает полёт боеголовок; по прилёте — взрыв, расчёт жертв, обновление статистики.
@@ -201,7 +321,14 @@ export class Simulation {
         biome,
       });
       for (const h of hits) {
-        events.push({ kind: 'cityHit', name: h.name, deaths: h.deaths, atWaveTime: h.atWaveTime });
+        events.push({
+          kind: 'cityHit',
+          name: h.name,
+          deaths: h.deaths,
+          atWaveTime: h.atWaveTime,
+          faction: h.faction,
+          alive: h.alive,
+        });
       }
 
       this.bombs += 1;
@@ -213,13 +340,15 @@ export class Simulation {
         megatons: this.megatons,
         deaths: this.totalDeaths,
       });
+      if (hits.length > 0) events.push(this.factionsEvent()); // население сторон изменилось
     }
   }
 
   // Снимок состояния для отладки/сериализации (не участвует в геймплейной логике).
   snapshot(): unknown {
     return {
-      cities: this.cities.map((c) => ({ name: c.name, alive: c.alive })),
+      cities: this.cities.map((c) => ({ name: c.name, alive: c.alive, faction: c.faction })),
+      arsenals: Object.fromEntries(this.arsenals),
       bombs: this.bombs,
       megatons: this.megatons,
       totalDeaths: this.totalDeaths,
