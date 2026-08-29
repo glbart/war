@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { evaluateOutcome, isFallen, canFight, OUTCOME_TITLES } from '../../src/sim/victory';
 import type { SideSnapshot, GameState } from '../../src/sim/victory';
-import { FALLEN_FRAC, PEACE_HOLD_T } from '../../src/assets/config';
+import { FALLEN_FRAC, PEACE_HOLD_T, CAMPAIGN_T, PROLIF_LOSS_COUNT } from '../../src/assets/config';
 
 const side = (over: Partial<SideSnapshot> & { id: SideSnapshot['id'] }): SideSnapshot => ({
   popAlive: 100,
@@ -12,6 +12,10 @@ const side = (over: Partial<SideSnapshot> & { id: SideSnapshot['id'] }): SideSna
 });
 
 const state = (over: Partial<GameState> = {}): GameState => ({
+  armedCount: 0,
+  elapsed: 0,
+  campaignT: CAMPAIGN_T,
+  lossCount: PROLIF_LOSS_COUNT,
   warHappened: true,
   missilesInFlight: 0,
   atPeace: false,
@@ -67,8 +71,31 @@ describe('Условия победы', () => {
     expect(canFight(side({ id: 'usa' }))).toBe(true);
   });
 
+  it('кампания сильнее военных исходов: три бомбы — поражение, дожил до конца — победа', () => {
+    const sides = [side({ id: 'usa' }), side({ id: 'russia' })];
+    expect(evaluateOutcome(sides, state({ armedCount: PROLIF_LOSS_COUNT }))).toEqual({
+      outcome: 'proliferated',
+    });
+    expect(evaluateOutcome(sides, state({ elapsed: CAMPAIGN_T }))).toEqual({
+      outcome: 'nonproliferation',
+    });
+    // распространение перебивает даже полное уничтожение сторон
+    const dead = [side({ id: 'usa', popAlive: 0 }), side({ id: 'russia', popAlive: 0 })];
+    expect(evaluateOutcome(dead, state({ armedCount: PROLIF_LOSS_COUNT }))).toEqual({
+      outcome: 'proliferated',
+    });
+  });
+
   it('у каждого исхода есть заголовок для экрана итогов', () => {
-    for (const key of ['victory', 'mutual', 'exhausted', 'peace'] as const) {
+    for (const key of [
+      'victory',
+      'mutual',
+      'exhausted',
+      'peace',
+      'pyrrhic',
+      'nonproliferation',
+      'proliferated',
+    ] as const) {
       expect(OUTCOME_TITLES[key].length).toBeGreaterThan(0);
     }
   });

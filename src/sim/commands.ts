@@ -18,5 +18,11 @@ export type Command =
   | { kind: 'setSide'; faction?: FactionId }
   | { kind: 'proposeCeasefire'; from: FactionId; to: FactionId }
   | { kind: 'ceasefireResponse'; from: FactionId; to: FactionId; accept: boolean }
+  // Инструменты нераспространения (спека 2026-08-29-nonproliferation §4): каждый стоит
+  // влияния; цель — страна-претендент.
+  | { kind: 'offerTreaty'; target: FactionId }
+  | { kind: 'imposeSanctions'; target: FactionId }
+  | { kind: 'inspect'; target: FactionId }
+  | { kind: 'sabotage'; target: FactionId }
   | { kind: 'reset' }
   | { kind: 'toggleLabels' };

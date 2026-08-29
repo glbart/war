@@ -1,4 +1,5 @@
-// Стороны конфликта (спека 2026-08-29-factions-design.md): восемь ядерных держав + псевдо-
+// Стороны конфликта (спеки 2026-08-29-factions-design.md и -nonproliferation-design.md):
+// восемь ядерных держав, восемь стран-претендентов (оружия нет, программа есть) и псевдо-
 // фракция «нейтральные» для всех прочих городов. Чистые данные и функции над ними — без
 // three.js и без состояния: изменяемое (арсенал, живое население) живёт в Simulation.
 //
@@ -7,13 +8,32 @@
 // красит тест. Город, не попавший ни в один список, — 'neutral'.
 
 export type FactionId =
-  'usa' | 'russia' | 'china' | 'europe' | 'india' | 'pakistan' | 'dprk' | 'israel' | 'neutral';
+  // ядерные державы
+  | 'usa'
+  | 'russia'
+  | 'china'
+  | 'europe'
+  | 'india'
+  | 'pakistan'
+  | 'dprk'
+  | 'israel'
+  // претенденты: оружия нет, но есть ядерная программа (спека 2026-08-29-nonproliferation)
+  | 'iran'
+  | 'saudi'
+  | 'turkey'
+  | 'egypt'
+  | 'japan'
+  | 'korea'
+  | 'brazil'
+  | 'safrica'
+  | 'neutral';
 
 export interface Faction {
   id: FactionId;
   name: string; // русское название для HUD
   color: [number, number, number]; // цвет стороны (r,g,b 0..1): маркеры городов, след ракеты
   arsenal: number; // стартовый запас боеголовок (игровая шкала, не реальные цифры)
+  aspirant?: boolean; // страна без оружия, но со своей ядерной программой
 }
 
 // Порядок в этом списке = порядок строк в панели сторон HUD; 'neutral' всегда последний.
@@ -26,8 +46,24 @@ export const FACTIONS: readonly Faction[] = [
   { id: 'pakistan', name: 'Пакистан', color: [0.25, 0.75, 0.3], arsenal: 6 },
   { id: 'dprk', name: 'КНДР', color: [0.75, 0.3, 0.85], arsenal: 3 },
   { id: 'israel', name: 'Израиль', color: [0.55, 0.5, 0.95], arsenal: 4 },
+  { id: 'iran', name: 'Иран', color: [0.15, 0.65, 0.5], arsenal: 0, aspirant: true },
+  { id: 'saudi', name: 'Саудовская Аравия', color: [0.85, 0.75, 0.45], arsenal: 0, aspirant: true },
+  { id: 'turkey', name: 'Турция', color: [0.9, 0.45, 0.45], arsenal: 0, aspirant: true },
+  { id: 'egypt', name: 'Египет', color: [0.75, 0.65, 0.3], arsenal: 0, aspirant: true },
+  { id: 'japan', name: 'Япония', color: [0.95, 0.6, 0.7], arsenal: 0, aspirant: true },
+  { id: 'korea', name: 'Южная Корея', color: [0.5, 0.65, 0.9], arsenal: 0, aspirant: true },
+  { id: 'brazil', name: 'Бразилия', color: [0.45, 0.8, 0.35], arsenal: 0, aspirant: true },
+  { id: 'safrica', name: 'ЮАР', color: [0.7, 0.5, 0.3], arsenal: 0, aspirant: true },
   { id: 'neutral', name: 'Нейтральные', color: [0.62, 0.64, 0.68], arsenal: 0 },
 ];
+
+// Страны-претенденты: у них нет оружия, но есть программа (sim/proliferation.ts).
+export const ASPIRANTS: readonly Faction[] = FACTIONS.filter((f) => f.aspirant === true);
+
+// Ядерные державы на старте партии (у претендентов арсенал появится, если они дойдут до бомбы).
+export const NUCLEAR_POWERS: readonly Faction[] = FACTIONS.filter(
+  (f) => f.id !== 'neutral' && f.aspirant !== true,
+);
 
 // Стороны, способные воевать (всё, кроме нейтральных) — источник списков для выбора
 // агрессора/цели в симуляции и для селектов HUD.
@@ -167,6 +203,24 @@ export const FACTION_CITIES: Readonly<Record<Exclude<FactionId, 'neutral'>, read
   pakistan: ['Karachi', 'Lahore', 'Rawalpindi', 'Faisalabad', 'Peshawar'],
   dprk: ['Pyongyang'],
   israel: ['Tel Aviv', 'Jerusalem'],
+  iran: ['Tehran'],
+  saudi: ['Riyadh', 'Jeddah'],
+  turkey: ['Istanbul', 'Ankara', 'Izmir'],
+  egypt: ['Cairo', 'Alexandria'],
+  japan: ['Tokyo', 'Osaka', 'Nagoya', 'Fukuoka', 'Sapporo'],
+  korea: ['Seoul', 'Busan'],
+  brazil: [
+    'São Paulo',
+    'Rio de Janeiro',
+    'Belo Horizonte',
+    'Brasília',
+    'Porto Alegre',
+    'Recife',
+    'Fortaleza',
+    'Salvador',
+    'Curitiba',
+  ],
+  safrica: ['Johannesburg', 'Cape Town', 'Durban'],
 };
 
 // Обратный индекс «имя города → сторона», строится один раз при загрузке модуля.

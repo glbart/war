@@ -23,6 +23,15 @@ export const DEFENSES: Record<FactionId, Defense> = {
   pakistan: { interceptors: 3, abm: 0.25 },
   dprk: { interceptors: 2, abm: 0.2 },
   israel: { interceptors: 6, abm: 0.7 },
+  // Претенденты: ПРО символическая (и появляется вместе с бомбой не сразу).
+  iran: { interceptors: 2, abm: 0.2 },
+  saudi: { interceptors: 3, abm: 0.3 },
+  turkey: { interceptors: 2, abm: 0.25 },
+  egypt: { interceptors: 1, abm: 0.2 },
+  japan: { interceptors: 4, abm: 0.5 },
+  korea: { interceptors: 4, abm: 0.5 },
+  brazil: { interceptors: 1, abm: 0.15 },
+  safrica: { interceptors: 1, abm: 0.15 },
   neutral: { interceptors: 0, abm: 0 }, // нейтральные не обороняются
 };
 

@@ -77,7 +77,19 @@ describe('Лестница эскалации', () => {
       );
     expect(maxFrom(first)).toBe(1); // кризис — только демонстрация
     expect(maxFrom(second)).toBeGreaterThanOrEqual(maxFrom(first));
-    expect(statOf(second, 'russia')!.enemies.find((e) => e.id === 'usa')!.level).toBe(2);
+    // Смотрим МАКСИМАЛЬНЫЙ достигнутый накал: к концу окна пара могла уже помириться.
+    const peak = Math.max(
+      ...[...first, ...second]
+        .filter((e) => e.kind === 'factionsChanged')
+        .map(
+          (e) =>
+            (e.kind === 'factionsChanged' &&
+              e.factions.find((f) => f.id === 'russia')?.enemies.find((x) => x.id === 'usa')
+                ?.level) ||
+            0,
+        ),
+    );
+    expect(peak).toBe(2);
   });
 
   it('сдержанная доктрина держит потолок уровня', () => {
@@ -98,47 +110,43 @@ describe('Переговоры и перемирие', () => {
     { kind: 'salvo', from: 'usa', to: 'russia' },
   ];
 
-  it('предложение игрока обдумывается стороной и может быть принято', () => {
-    let accepted: SimEvent[] | undefined;
-    for (let seed = 1; seed <= 40 && accepted === undefined; seed++) {
+  // Сторона соглашается на мир, когда ей уже тяжело: гоняем несколько залпов и ищем сид,
+  // на котором Россия принимает предложение игрока (ответ приходит на её пульсе раздумий).
+  function offerAcceptedByRussia(): { sim: Simulation; events: SimEvent[] } | undefined {
+    for (let seed = 1; seed <= 30; seed++) {
       const sim = new Simulation(seed);
-      run(sim, 20, [
+      run(sim, 12, [
         { kind: 'setSide', faction: 'usa' },
-        { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
+        { kind: 'salvo', from: 'usa', to: 'russia' },
       ]);
-      // ИИ отвечает не мгновенно, а на своём пульсе раздумий — даём ему время
-      const events = run(sim, 12, [{ kind: 'proposeCeasefire', from: 'usa', to: 'russia' }]);
-      if (of(events, 'ceasefireAccepted').length > 0) accepted = events;
+      run(sim, 12, [{ kind: 'salvo', from: 'usa', to: 'russia' }]);
+      run(sim, 12, [{ kind: 'salvo', from: 'usa', to: 'russia' }]);
+      const events = run(sim, 15, [{ kind: 'proposeCeasefire', from: 'usa', to: 'russia' }]);
+      if (of(events, 'ceasefireAccepted').length > 0) return { sim, events };
     }
+    return undefined;
+  }
+
+  it('измотанная сторона обдумывает предложение игрока и принимает его', () => {
+    const accepted = offerAcceptedByRussia();
     expect(accepted).toBeDefined();
-    const truce = statOf(accepted!, 'russia')!.enemies.find((e) => e.id === 'usa');
+    const truce = statOf(accepted!.events, 'russia')!.enemies.find((e) => e.id === 'usa');
     expect(truce?.truce).toBe(true);
     expect(truce?.level).toBe(0);
   });
 
   it('перемирие держит стороны: пока оно в силе, ударов по партнёру нет', () => {
-    let checked = false;
-    for (let seed = 1; seed <= 40 && !checked; seed++) {
-      const sim = new Simulation(seed);
-      run(sim, 20, [
-        { kind: 'setSide', faction: 'usa' },
-        { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
-      ]);
-      const answer = run(sim, 12, [{ kind: 'proposeCeasefire', from: 'usa', to: 'russia' }]);
-      if (of(answer, 'ceasefireAccepted').length === 0) continue;
-      const after = run(sim, 25);
-      // пока перемирие не сорвано прилётом, пара не обменивается ударами
-      const broken = of(after, 'truceBroken').some(
-        (t) =>
-          (t.by === 'usa' && t.against === 'russia') || (t.by === 'russia' && t.against === 'usa'),
-      );
-      const strikes = of(after, 'retaliationLaunched').filter(
-        (r) => (r.from === 'russia' && r.to === 'usa') || (r.from === 'usa' && r.to === 'russia'),
-      );
-      if (!broken) expect(strikes).toHaveLength(0);
-      checked = true;
-    }
-    expect(checked).toBe(true);
+    const accepted = offerAcceptedByRussia();
+    expect(accepted).toBeDefined();
+    const after = run(accepted!.sim, 25);
+    const broken = of(after, 'truceBroken').some(
+      (t) =>
+        (t.by === 'usa' && t.against === 'russia') || (t.by === 'russia' && t.against === 'usa'),
+    );
+    const strikes = of(after, 'retaliationLaunched').filter(
+      (r) => (r.from === 'russia' && r.to === 'usa') || (r.from === 'usa' && r.to === 'russia'),
+    );
+    if (!broken) expect(strikes).toHaveLength(0);
   });
 
   it('предложение стороне игрока ждёт его ответа: молчание — отказ, согласие — перемирие', () => {

@@ -206,6 +206,11 @@
   align-items: center;
   gap: 6px;
 }
+/* display:flex перебивает штатное скрытие через атрибут hidden — возвращаем его явно
+   (претенденты в списке сторон появляются только с бомбой или войной). */
+#factions .f-row[hidden] {
+  display: none;
+}
 #factions .f-row.fallen {
   opacity: 0.45;
 }
@@ -233,6 +238,83 @@
   text-align: right;
   color: #7d93b8;
   white-space: nowrap;
+}
+/* Панель ядерных программ (режим «Нераспространение»). */
+#programs-title {
+  margin: 2px 0 4px;
+  font-size: 11px;
+  color: #7d93b8;
+  letter-spacing: 1px;
+}
+#programs {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+#programs .p-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0 4px;
+}
+#programs .p-row:hover {
+  background: rgba(120, 170, 255, 0.1);
+}
+#programs .p-row.selected {
+  background: rgba(120, 170, 255, 0.22);
+}
+#programs i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+#programs .p-name {
+  flex: 1;
+  white-space: nowrap;
+}
+#programs .p-stage {
+  color: #ff9b5e;
+  white-space: nowrap;
+  font-size: 10px;
+}
+#programs .p-stage.unknown {
+  color: #5a6d8c;
+}
+#programs .p-marks {
+  color: #9be79b;
+  white-space: nowrap;
+}
+#programs .p-bar {
+  width: 54px;
+  height: 5px;
+  flex: none;
+  background: rgba(120, 170, 255, 0.18);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#programs .p-bar i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 3px;
+  background: #ff9b5e;
+}
+#programs .p-bar i.armed {
+  background: #ff5544;
+}
+#tools button {
+  font-size: 12px;
+}
+#feed div.prog {
+  color: #d7c07a;
+}
+#gameover .go-campaign {
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #9fb4d8;
 }
 /* Панель «почему»: разложение последнего решения стороны (Utility AI). */
 #why {

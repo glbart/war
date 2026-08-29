@@ -276,3 +276,29 @@ export const AI_STRIKE_COOLDOWN = 25;
 // Сколько «обиды» (млн погибших) гасит одна выпущенная в отместку боеголовка. Месть
 // удовлетворяет: иначе один удар питает бесконечную череду ответов.
 export const GRIEVANCE_SETTLED_PER_WARHEAD = 6; // сколько лучших вариантов отдавать наружу для панели «почему»
+
+// ---------- Режим «Нераспространение» (спека 2026-08-29-nonproliferation-design.md) ----------
+export const CAMPAIGN_T = 600; // сек партии: дожить до конца, не дав никому новую бомбу
+export const PROLIF_LOSS_COUNT = 3; // столько новых ядерных держав — поражение
+// Влияние — политический капитал игрока: капает со временем, тратится на инструменты.
+export const INFLUENCE_START = 60;
+export const INFLUENCE_RATE = 1.2; // в секунду
+export const COST_TREATY = 25;
+export const COST_SANCTIONS = 15;
+export const COST_INSPECT = 8;
+export const COST_SABOTAGE = 30;
+export const INFLUENCE_STRIKE_PENALTY = 40; // мир осуждает удар по неядерной стране
+// Ядерная программа претендента.
+export const PROGRAM_BASE_RATE = 0.05; // прогресс стадии в секунду при мотивации и потенциале = 1
+export const PROGRAM_STAGES = 3; // research → enrichment → weapon (после — испытание)
+export const PROGRAM_START_MOTIVATION = 0.25; // ниже этого страна даже не начинает
+export const SANCTION_SLOWDOWN = 0.35; // множитель скорости под санкциями
+export const SANCTION_T = 120; // сек действия санкций
+export const TREATY_T = 180; // сек заморозки программы по договору
+export const SABOTAGE_SUCCESS = 0.65; // шанс удачного саботажа
+export const SABOTAGE_SETBACK_MIN = 0.3; // откат прогресса при удаче
+export const SABOTAGE_SETBACK_MAX = 0.6;
+export const SUSPICION_REVEAL = 0.5; // выше этого порога программа считается подтверждённой
+export const CASCADE_MOTIVATION = 0.15; // чужое испытание подстёгивает всех остальных
+export const NEW_POWER_ARSENAL = 4; // боеголовок у страны, дошедшей до испытания
+export const NEW_POWER_INTERCEPTORS = 2;

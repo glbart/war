@@ -54,6 +54,14 @@ const reloaded = (ctx: DecisionContext): number =>
   evalCurve(sCurve(0.5, 9), Math.min(1, ctx.self.sinceStrike / AI_STRIKE_COOLDOWN));
 
 const PEACEFULNESS: Record<Temperament, number> = { dove: 0.85, balanced: 0.55, hawk: 0.3 };
+
+// Миролюбие — не константа характера: когда стране совсем плохо, даже ястреб становится
+// сговорчивее. Иначе истощённый ястреб не принимает мир ни при каких условиях.
+const peaceMind = (ctx: DecisionContext): number => {
+  const base = PEACEFULNESS[ctx.self.temperament];
+  const w = weariness(ctx);
+  return base + (0.9 - base) * w * w;
+};
 const LOYALTY: Record<Temperament, number> = { dove: 0.5, balanced: 0.65, hawk: 0.8 };
 
 const STRIKE_WEIGHT: Record<Temperament, number> = { dove: 0.75, balanced: 1, hawk: 1.25 };
@@ -155,7 +163,7 @@ export const ACTIONS: readonly ActionTemplate[] = [
       // только что предлагали — новое предложение просто шумит.
       { name: 'стол свободен', value: r!.offerPending || r!.peaceCooldown ? 0 : 1 },
       { name: 'усталость от войны', value: weariness(ctx) },
-      { name: 'миролюбие', value: PEACEFULNESS[ctx.self.temperament] },
+      { name: 'миролюбие', value: peaceMind(ctx) },
     ],
   },
   {
@@ -165,9 +173,9 @@ export const ACTIONS: readonly ActionTemplate[] = [
     considerations: (ctx, r) => [
       { name: 'предложение на столе', value: r!.offerFromThem ? 1 : 0 },
       { name: 'усталость от войны', value: weariness(ctx) },
-      { name: 'миролюбие', value: PEACEFULNESS[ctx.self.temperament] },
-      // Чем горячее конфликт, тем труднее сесть за стол.
-      { name: 'накал терпим', value: Math.max(0.2, 1 - 0.6 * hostility(r!)) },
+      { name: 'миролюбие', value: peaceMind(ctx) },
+      // Чем горячее конфликт, тем труднее сесть за стол — но истощение перевешивает.
+      { name: 'накал терпим', value: Math.max(0.4, 1 - 0.4 * hostility(r!)) },
     ],
   },
 ];

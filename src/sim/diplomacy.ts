@@ -64,6 +64,14 @@ export const TEMPERAMENTS: Record<FactionId, Temperament> = {
   pakistan: 'hawk',
   dprk: 'hawk',
   israel: 'hawk',
+  iran: 'hawk',
+  saudi: 'balanced',
+  turkey: 'balanced',
+  egypt: 'balanced',
+  japan: 'dove',
+  korea: 'balanced',
+  brazil: 'dove',
+  safrica: 'dove',
   neutral: 'dove',
 };
 

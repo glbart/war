@@ -5,7 +5,15 @@
 import { FALLEN_FRAC } from '../assets/config';
 import type { FactionId } from './factions';
 
-export type Outcome = 'victory' | 'mutual' | 'exhausted' | 'peace' | 'pyrrhic';
+export type Outcome =
+  | 'victory'
+  | 'mutual'
+  | 'exhausted'
+  | 'peace'
+  | 'pyrrhic'
+  // Исходы режима «Нераспространение» (спека 2026-08-29-nonproliferation §5).
+  | 'nonproliferation'
+  | 'proliferated';
 
 export const OUTCOME_TITLES: Record<Outcome, string> = {
   victory: 'Победа',
@@ -13,6 +21,8 @@ export const OUTCOME_TITLES: Record<Outcome, string> = {
   exhausted: 'Арсеналы исчерпаны',
   peace: 'Мир восстановлен',
   pyrrhic: 'Разорённый мир',
+  nonproliferation: 'Распространение остановлено',
+  proliferated: 'Бомба разошлась по миру',
 };
 
 // Снимок одной воюющей стороны для оценки исхода (нейтральные в оценке не участвуют).
@@ -25,6 +35,11 @@ export interface SideSnapshot {
 }
 
 export interface GameState {
+  // Кампания «Нераспространение»: сколько стран получило бомбу и сколько прошло секунд.
+  armedCount: number;
+  elapsed: number;
+  campaignT: number;
+  lossCount: number;
   warHappened: boolean; // была ли вообще война (без неё исхода нет)
   missilesInFlight: number;
   atPeace: boolean; // все пары на нулевом уровне или в перемирии
@@ -47,6 +62,10 @@ export function evaluateOutcome(
   sides: SideSnapshot[],
   state: GameState,
 ): { outcome: Outcome; winner?: FactionId } | undefined {
+  // Условия кампании сильнее военных: партия про нераспространение и заканчивается по нему.
+  if (state.armedCount >= state.lossCount) return { outcome: 'proliferated' };
+  if (state.elapsed >= state.campaignT) return { outcome: 'nonproliferation' };
+
   if (!state.warHappened) return undefined;
 
   const standing = sides.filter((s) => !isFallen(s));
