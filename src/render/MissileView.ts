@@ -9,7 +9,7 @@ import type { Vec3 } from '../sim/geo';
 import { ballisticPosInto } from '../sim/ballistics';
 import { factionById, type FactionId } from '../sim/factions';
 import { findFreeSlotIndex } from './SlotPool';
-import { TRAIL_SEGMENTS, TRAIL_FADE_T, TRAIL_COLOR } from '../assets/config';
+import { TRAIL_SEGMENTS, TRAIL_FADE_T, TRAIL_COLOR, SPACE_STRIKE_START_R } from '../assets/config';
 
 // Точный тип float-юниформа (как в MagmaCore): .value — number.
 function makeFloatUniform(v: number) {
@@ -30,7 +30,7 @@ type ColorUniform = ReturnType<typeof makeColorUniform>;
 // 24 (было 16): слот теперь занят и ПОСЛЕ детонации баллистической ракеты — пока тает её
 // след (TRAIL_FADE_T) — залп 6 ракет × (полёт до 8с + фейд 5с) держит слоты дольше.
 const POOL_SIZE = 24;
-const START_RADIUS = 2.6;
+const START_RADIUS = SPACE_STRIKE_START_R; // общая с sim (точка вспышки ПРО)
 const END_RADIUS = 1.0;
 const MODEL_SPIN_SPEED = 1.5; // рад/с вращения корпуса вокруг собственной оси
 const FLAME_BASE_SCALE = 0.8;

@@ -13,5 +13,10 @@ export type Command =
   | { kind: 'salvo'; from?: FactionId; to?: FactionId }
   | { kind: 'setYield'; yield: number }
   | { kind: 'setDoctrine'; doctrine: Doctrine } // режим ответных ударов сторон
+  // Сторона игрока: ей приписываются ручные удары, ей же адресуют предложения перемирия
+  // (иначе решение за неё принимает ИИ). undefined — игрок «наблюдатель».
+  | { kind: 'setSide'; faction?: FactionId }
+  | { kind: 'proposeCeasefire'; from: FactionId; to: FactionId }
+  | { kind: 'ceasefireResponse'; from: FactionId; to: FactionId; accept: boolean }
   | { kind: 'reset' }
   | { kind: 'toggleLabels' };

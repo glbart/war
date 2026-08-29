@@ -2,6 +2,7 @@ import type { SimHost } from '../sim/SimHost';
 import type { GlobeView } from '../render/GlobeView';
 import type { Scene } from '../render/Scene';
 import { lonLatToDir } from '../sim/geo';
+import type { SimEvent } from '../sim/events';
 
 // Dev-инструменты headless-приёмки (Task 12): вешают на window хуки для нанесения ударов,
 // сброса симуляции и наведения камеры без ручного взаимодействия с UI. Используются
@@ -29,6 +30,14 @@ export function installDevHooks(host: SimHost, globe: GlobeView): void {
     globe.spinGroup.rotation.y = Math.atan2(-dir.x, dir.z);
     globe.tiltGroup.rotation.x = latRad;
   };
+}
+
+// __hud(event) — прогнать событие симуляции прямо в HUD, минуя игру. Нужен headless-приёмке
+// для редких экранов (итоги партии, предложение перемирия), до которых иначе надо доигрывать
+// целую войну. Только dev-сборка, как и остальные хуки.
+export function installHudHook(hud: { onEvent: (e: SimEvent) => void }): void {
+  const w = window as unknown as Record<string, unknown>;
+  w.__hud = (event: SimEvent) => hud.onEvent(event);
 }
 
 // __waterStats() — readback поля воды (min/max высоты R и скорости G): прямой факт «есть ли

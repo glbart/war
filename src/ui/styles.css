@@ -18,6 +18,10 @@
   backdrop-filter: blur(6px);
   user-select: none;
   min-width: 230px;
+  /* Панель выросла (стороны, доктрина, переговоры) — на низких экранах пусть скроллится,
+     а не уезжает за край. */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 #ui h1 {
   margin: 0 0 8px;
@@ -78,9 +82,108 @@
 #feed div {
   animation: feedIn 0.4s ease-out;
 }
-/* Строки об ответных ударах — отличаются от строк о погибших городах. */
+/* Потоки ленты различаются цветом: ответные удары, работа ПРО, переговоры. */
 #feed div.war {
   color: #ffcc66;
+}
+#feed div.abm {
+  color: #8fd4ff;
+}
+#feed div.peace {
+  color: #9be79b;
+}
+/* Входящее предложение перемирия — над лентой, с кнопками решения. */
+#peace-offer {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #9be79b;
+  border: 1px solid rgba(155, 231, 155, 0.35);
+  border-radius: 8px;
+  background: rgba(30, 70, 40, 0.35);
+}
+#peace-offer .row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+#truce {
+  background: rgba(30, 90, 50, 0.5);
+}
+#truce:hover {
+  background: rgba(40, 130, 70, 0.6);
+}
+/* Экран итогов партии. */
+#gameover-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(2, 5, 12, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#gameover {
+  color: #cfe3ff;
+  font:
+    13px/1.55 'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  background: rgba(8, 14, 26, 0.96);
+  border: 1px solid rgba(120, 170, 255, 0.3);
+  border-radius: 14px;
+  padding: 18px 22px;
+  width: min(680px, calc(100vw - 40px));
+}
+#gameover h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+  letter-spacing: 1px;
+  color: #ffd28a;
+}
+#gameover table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+#gameover th {
+  text-align: right;
+  color: #7d93b8;
+  font-weight: normal;
+  padding: 2px 6px;
+}
+#gameover th:first-child,
+#gameover td:first-child {
+  text-align: left;
+}
+#gameover td {
+  text-align: right;
+  padding: 3px 6px;
+  border-top: 1px solid rgba(120, 170, 255, 0.12);
+}
+#gameover tr.winner td {
+  color: #ffd28a;
+}
+#gameover td i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+#gameover-again {
+  margin-top: 14px;
+  color: #cfe3ff;
+  background: rgba(120, 170, 255, 0.15);
+  border: 1px solid rgba(120, 170, 255, 0.35);
+  border-radius: 8px;
+  padding: 7px 18px;
+  font: inherit;
+  cursor: pointer;
+}
+#gameover-again:hover {
+  background: rgba(120, 170, 255, 0.28);
 }
 @keyframes feedIn {
   from {

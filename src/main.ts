@@ -65,8 +65,9 @@ async function boot() {
   // в dev-сборке; динамический импорт под import.meta.env.DEV гарантирует, что Vite
   // вырежет модуль и хуки из прод-бандла (dead-code elimination).
   if (import.meta.env.DEV) {
-    const { installDevHooks } = await import('./debug/devHooks');
+    const { installDevHooks, installHudHook } = await import('./debug/devHooks');
     installDevHooks(host, globe);
+    installHudHook(hud);
   }
 
   // Первый пользовательский жест разрешает WebAudio (браузеры не дают запустить

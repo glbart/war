@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { Simulation } from '../../src/sim/Simulation';
 import { lonLatToDir } from '../../src/sim/geo';
-import { factionById, type FactionId } from '../../src/sim/factions';
+import { factionById } from '../../src/sim/factions';
 import { alliesOf } from '../../src/sim/diplomacy';
 import { TICK_DT } from '../../src/core/time';
-import type { SimEvent, FactionStat } from '../../src/sim/events';
+import type { SimEvent } from '../../src/sim/events';
+import { run, of, statOf, strikeThatLands } from '../helpers/war';
 
 const at = (lonDeg: number, latDeg: number) =>
   lonLatToDir((lonDeg * Math.PI) / 180, (latDeg * Math.PI) / 180);
@@ -14,26 +15,13 @@ const NEW_YORK = at(-74.01, 40.71);
 const TOKYO = at(139.76, 35.68);
 const PYONGYANG = at(125.75, 39.03);
 
-// Прогоняет симуляцию seconds секунд, собирая все события.
-function run(sim: Simulation, seconds: number, cmds: Parameters<Simulation['step']>[1] = []) {
-  const out: SimEvent[] = [];
-  const steps = Math.ceil(seconds / TICK_DT);
-  for (let i = 0; i < steps; i++) out.push(...sim.step(TICK_DT, i === 0 ? cmds : []));
-  return out;
-}
-
-const revenges = (events: SimEvent[]) =>
-  events.flatMap((e) => (e.kind === 'retaliationLaunched' ? [e] : []));
-
-const statOf = (events: SimEvent[], id: FactionId): FactionStat | undefined => {
-  const e = events.filter((x) => x.kind === 'factionsChanged').at(-1);
-  return e && e.kind === 'factionsChanged' ? e.factions.find((s) => s.id === id) : undefined;
-};
+const revenges = (events: SimEvent[]) => of(events, 'retaliationLaunched');
 
 describe('Ответный удар', () => {
   it('удар США по Москве → Россия отвечает по США и тратит арсенал', () => {
-    const sim = new Simulation(101);
-    const events = run(sim, 12, [{ kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' }]);
+    const { events } = strikeThatLands(12, [
+      { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
+    ]);
     const answer = revenges(events).find((r) => r.from === 'russia');
     expect(answer).toBeDefined();
     expect(answer!.to).toBe('usa');
@@ -43,10 +31,12 @@ describe('Ответный удар', () => {
   });
 
   it('стороны становятся воюющими — это видно в статистике сторон', () => {
-    const sim = new Simulation(102);
-    const events = run(sim, 6, [{ kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' }]);
-    expect(statOf(events, 'russia')!.enemies).toContain('usa');
-    expect(statOf(events, 'usa')!.enemies).toContain('russia');
+    // сид ищем: ПРО России может сбить одиночную боеголовку, тогда войны не будет
+    const { events } = strikeThatLands(6, [
+      { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
+    ]);
+    expect(statOf(events, 'russia')!.enemies.map((e) => e.id)).toContain('usa');
+    expect(statOf(events, 'usa')!.enemies.map((e) => e.id)).toContain('russia');
   });
 
   it('доктрина «выкл» — ответов нет вообще', () => {
@@ -71,15 +61,13 @@ describe('Ответный удар', () => {
   });
 
   it('залп по стране даёт ОДИН ответ жертвы, а не по ответу на каждую ракету', () => {
-    const sim = new Simulation(105);
-    const events = run(sim, 14, [{ kind: 'salvo', from: 'usa', to: 'russia' }]);
+    const { events } = strikeThatLands(14, [{ kind: 'salvo', from: 'usa', to: 'russia' }]);
     const own = revenges(events).filter((r) => r.from === 'russia' && r.reason === 'revenge');
     expect(own).toHaveLength(1);
   });
 
   it('анонимный удар: жертва винит другую сторону, но не себя', () => {
-    const sim = new Simulation(106);
-    const events = run(sim, 12, [{ kind: 'detonate', dir: MOSCOW, yield: 100 }]);
+    const { events } = strikeThatLands(12, [{ kind: 'detonate', dir: MOSCOW, yield: 100 }]);
     const answer = revenges(events).find((r) => r.from === 'russia');
     expect(answer).toBeDefined();
     expect(answer!.to).not.toBe('russia');
@@ -110,10 +98,10 @@ describe('Ответный удар', () => {
   });
 
   it('обмен раскручивается: удар порождает цепочку ответов с обеих сторон', () => {
-    const sim = new Simulation(110);
-    const events = run(sim, 40, [
+    const { sim, events: first } = strikeThatLands(12, [
       { kind: 'detonate', dir: NEW_YORK, yield: 100, faction: 'russia' },
     ]);
+    const events = [...first, ...run(sim, 40)];
     const sides = new Set(revenges(events).map((r) => r.from));
     expect(sides.size).toBeGreaterThan(1); // отвечает не только первая жертва
     expect(revenges(events).length).toBeGreaterThan(1);
@@ -140,16 +128,16 @@ describe('Ответный удар', () => {
     }
   });
 
-  it('эскалация даёт более крупные волны, чем сдержанная доктрина', () => {
-    const size = (doctrine: 'restrained' | 'escalate') => {
-      const sim = new Simulation(111);
-      const events = run(sim, 14, [
+  it('эскалация поднимает потолок конфликта выше сдержанной доктрины', () => {
+    const level = (doctrine: 'restrained' | 'escalate') => {
+      const { sim, events: first } = strikeThatLands(14, [
         { kind: 'setDoctrine', doctrine },
         { kind: 'salvo', from: 'usa', to: 'russia' },
       ]);
-      return revenges(events).find((r) => r.from === 'russia')!.count;
+      const events = [...first, ...run(sim, 30, [{ kind: 'salvo', from: 'usa', to: 'russia' }])];
+      return statOf(events, 'russia')!.enemies.find((e) => e.id === 'usa')?.level ?? 0;
     };
-    expect(size('escalate')).toBeGreaterThan(size('restrained'));
+    expect(level('escalate')).toBeGreaterThan(level('restrained'));
   });
 
   it('неизвестная доктрина — ошибка на границе применения команд', () => {

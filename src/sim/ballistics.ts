@@ -10,6 +10,7 @@ import {
   BALLISTIC_TIME_MIN,
   BALLISTIC_TIME_SCALE,
   BALLISTIC_EASE_POW,
+  SPACE_STRIKE_START_R,
 } from '../assets/config';
 
 // Сферическая интерполяция единичных векторов. На почти совпадающих направлениях
@@ -81,4 +82,11 @@ export function ballisticPosInto(from: Vec3, to: Vec3, k: number, out: Vec3): Ve
   out.y = py * h;
   out.z = pz * h;
   return out;
+}
+
+// Позиция «удара из космоса» (ручной клик): радиальный спуск START→1 по k² — общая формула
+// для рендера (MissileView) и симуляции (точка вспышки ПРО), чтобы не расходились.
+export function spaceStrikePos(dir: Vec3, k: number): Vec3 {
+  const r = SPACE_STRIKE_START_R - (SPACE_STRIKE_START_R - 1) * k * k;
+  return { x: dir.x * r, y: dir.y * r, z: dir.z * r };
 }

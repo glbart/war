@@ -7,6 +7,7 @@ import { angleBetween, lonLatToDir, type Vec3 } from '../../src/sim/geo';
 import { SALVO_COUNT, BALLISTIC_TIME_MIN, FACTION_LAUNCH_JITTER } from '../../src/assets/config';
 import { TICK_DT } from '../../src/core/time';
 import type { SimEvent, FactionStat } from '../../src/sim/events';
+import { strikeThatLands } from '../helpers/war';
 
 const launches = (events: SimEvent[]) =>
   events.flatMap((e) => (e.kind === 'missileLaunched' ? [e] : []));
@@ -94,11 +95,9 @@ describe('Simulation: залп МБР по сторонам', () => {
   });
 
   it('удар по городу стороны уменьшает её население в factionsChanged', () => {
-    const sim = new Simulation(3);
+    // ПРО может сбить одиночную боеголовку — берём сид, на котором удар дошёл.
     const moscow = lonLatToDir((37.62 * Math.PI) / 180, (55.75 * Math.PI) / 180);
-    sim.step(TICK_DT, [{ kind: 'detonate', dir: moscow, yield: 100 }]);
-    let events: SimEvent[] = [];
-    for (let i = 0; i < 120; i++) events = events.concat(sim.step(TICK_DT, []));
+    const { events } = strikeThatLands(6, [{ kind: 'detonate', dir: moscow, yield: 100 }]);
     const hit = events.find((e) => e.kind === 'cityHit' && e.name === 'Moscow');
     expect(hit && hit.kind === 'cityHit' ? hit.faction : undefined).toBe('russia');
     const before = createCities()

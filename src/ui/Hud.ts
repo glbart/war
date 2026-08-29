@@ -6,9 +6,16 @@
 // кадрового батча drainEvents(), которым уже пользуется Scene).
 import './styles.css';
 import type { SimHost } from '../sim/SimHost';
-import type { SimEvent, FactionStat } from '../sim/events';
+import type { SimEvent, FactionStat, SideSummary } from '../sim/events';
 import { FACTIONS, BELLIGERENTS, factionById, type FactionId } from '../sim/factions';
-import { DOCTRINES, DOCTRINE_NAMES, DEFAULT_DOCTRINE, type Doctrine } from '../sim/diplomacy';
+import {
+  DOCTRINES,
+  DOCTRINE_NAMES,
+  DEFAULT_DOCTRINE,
+  escalationName,
+  type Doctrine,
+} from '../sim/diplomacy';
+import { OUTCOME_TITLES, type Outcome } from '../sim/victory';
 import { createCities } from '../sim/cities';
 
 const DEFAULT_YIELD = 100;
@@ -26,6 +33,12 @@ function totalPops(): Map<FactionId, number> {
   const totals = new Map<FactionId, number>(FACTIONS.map((f) => [f.id, 0]));
   for (const c of createCities()) totals.set(c.faction, (totals.get(c.faction) ?? 0) + c.pop);
   return totals;
+}
+
+// В таблице итогов ноль должен читаться нулём: fmtPeople округляет всё ненулевое вверх
+// до «1 тыс.», что для сводки выглядит как потери там, где их не было.
+function fmtOrZero(m: number): string {
+  return m < 0.001 ? '0' : fmtPeople(m);
 }
 
 // Склонение слова «ракета» по числу — для строк ленты об ответных ударах.
@@ -79,6 +92,12 @@ export class Hud {
   private readonly targetSel: HTMLSelectElement;
   private readonly salvoBtn: HTMLButtonElement;
   private readonly doctrineSel: HTMLSelectElement; // режим ответных ударов (спека 2026-08-29)
+  private readonly truceBtn: HTMLButtonElement; // предложить перемирие выбранной стороне
+  private readonly offerEl: HTMLElement; // входящее предложение перемирия (кнопки да/нет)
+  private readonly offerTextEl: HTMLElement;
+  private offer: { from: FactionId; to: FactionId } | undefined;
+  private readonly overEl: HTMLElement; // экран итогов партии
+  private readonly overBodyEl: HTMLElement;
   private lastStats: FactionStat[] = [];
 
   // Метка времени (performance.now()) последнего explosionStarted — база задержки atWaveTime
@@ -96,6 +115,13 @@ export class Hud {
       <h1>☢ ЯДЕРНАЯ ПЕСОЧНИЦА</h1>
       <div id="shatter" style="display: none">☠ ПЛАНЕТА РАСКОЛОТА</div>
       <div id="stats">Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
+      <div id="peace-offer" style="display: none">
+        <span id="peace-text"></span>
+        <span class="row">
+          <button id="peace-yes">Принять</button>
+          <button id="peace-no">Отклонить</button>
+        </span>
+      </div>
       <div id="feed"></div>
       <div id="factions"></div>
       <div class="row">
@@ -112,7 +138,10 @@ export class Hud {
         <span class="label">Ответный удар</span>
         <select id="doctrine" title="как стороны отвечают на удары по себе"></select>
       </div>
-      <button id="salvo" style="width: 100%; margin-bottom: 8px">☢ Залп МБР</button>
+      <div class="row">
+        <button id="salvo">☢ Залп МБР</button>
+        <button id="truce">☮ Перемирие</button>
+      </div>
       <button id="reset">Восстановить планету</button>
       <button id="labels" class="active" style="width: 100%; margin-top: 8px">Границы и названия: вкл</button>
       <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар выбранной стороны</p>
@@ -133,6 +162,12 @@ export class Hud {
     this.targetSel = root.querySelector<HTMLSelectElement>('#target')!;
     this.salvoBtn = root.querySelector<HTMLButtonElement>('#salvo')!;
     this.doctrineSel = root.querySelector<HTMLSelectElement>('#doctrine')!;
+    this.truceBtn = root.querySelector<HTMLButtonElement>('#truce')!;
+    this.offerEl = root.querySelector<HTMLElement>('#peace-offer')!;
+    this.offerTextEl = root.querySelector<HTMLElement>('#peace-text')!;
+    const { overlay, body } = this.buildGameOver();
+    this.overEl = overlay;
+    this.overBodyEl = body;
     this.buildFactionRows(root.querySelector<HTMLElement>('#factions')!);
     this.buildSideSelects();
     this.buildDoctrineSelect();
@@ -155,6 +190,24 @@ export class Hud {
     // Смена агрессора может сделать залп невозможным (нет боеголовок/городов) — кнопка
     // гаснет сразу, не дожидаясь следующего события симуляции.
     this.attackerSel.addEventListener('change', () => this.updateSalvoButton());
+    this.targetSel.addEventListener('change', () => this.updateSalvoButton());
+    // Сторона игрока: симуляция должна знать её, чтобы адресовать игроку предложения мира.
+    this.attackerSel.addEventListener('change', () =>
+      this.host.post({ kind: 'setSide', faction: this.currentSide }),
+    );
+    // Предложить перемирие стороне из правого селекта (кому — та же цель, что и для залпа).
+    this.truceBtn.addEventListener('click', () => {
+      const from = this.currentSide;
+      const to = this.targetSel.value as FactionId | typeof ANY;
+      if (from === undefined || to === ANY || to === from) return;
+      this.host.post({ kind: 'proposeCeasefire', from, to });
+    });
+    root
+      .querySelector<HTMLButtonElement>('#peace-yes')!
+      .addEventListener('click', () => this.answerOffer(true));
+    root
+      .querySelector<HTMLButtonElement>('#peace-no')!
+      .addEventListener('click', () => this.answerOffer(false));
     // Доктрина ответа — состояние симуляции: селект отражает её только по doctrineChanged.
     this.doctrineSel.addEventListener('change', () =>
       this.host.post({ kind: 'setDoctrine', doctrine: this.doctrineSel.value as Doctrine }),
@@ -229,6 +282,15 @@ export class Hud {
         ? this.lastStats.some((s) => s.id !== 'neutral' && able(s))
         : this.lastStats.some((s) => s.id === chosen && able(s));
     this.salvoBtn.disabled = !can;
+    const side = this.currentSide;
+    const to = this.targetSel.value as FactionId | typeof ANY;
+    const atWar =
+      side !== undefined &&
+      to !== ANY &&
+      to !== side &&
+      (this.lastStats.find((s) => s.id === side)?.enemies.some((e) => e.id === to && !e.truce) ??
+        false);
+    this.truceBtn.disabled = !atWar;
   }
 
   // Обновляет строки сторон по снимку из factionsChanged; DOM пишем только при смене текста.
@@ -241,14 +303,18 @@ export class Hud {
       const fallen = total > 0 && s.popAlive < total * FACTION_FALLEN_FRAC;
       const pop = (fallen ? '☠ ' : '') + (s.popAlive > 0.05 ? fmtPeople(s.popAlive) : '—');
       if (row.pop.textContent !== pop) row.pop.textContent = pop;
-      // Нейтральные не воюют — арсенала у них нет и колонка остаётся пустой.
-      const ars = s.id === 'neutral' ? '' : `☢ ${s.arsenal}`;
+      // Нейтральные не воюют — арсенала и ПРО у них нет, колонка остаётся пустой.
+      const ars = s.id === 'neutral' ? '' : `☢ ${s.arsenal} 🛡 ${s.interceptors}`;
       if (row.ars.textContent !== ars) row.ars.textContent = ars;
-      // Война: значок ⚔ и список противников в подсказке.
-      const war = s.enemies.length > 0 ? '⚔' : '';
-      if (row.war.textContent !== war) {
+      // Конфликты: ⚔ — идёт война, ☮ — перемирие; в подсказке уровень по каждой паре.
+      const fighting = s.enemies.filter((e) => !e.truce);
+      const war = fighting.length > 0 ? '⚔' : s.enemies.length > 0 ? '☮' : '';
+      const title = s.enemies
+        .map((e) => `${factionById(e.id).name}: ${e.truce ? 'перемирие' : escalationName(e.level)}`)
+        .join(', ');
+      if (row.war.textContent !== war || row.war.title !== title) {
         row.war.textContent = war;
-        row.war.title = s.enemies.map((id) => factionById(id).name).join(', ');
+        row.war.title = title;
       }
       row.row.classList.toggle('fallen', fallen);
     }
@@ -310,6 +376,39 @@ export class Hud {
       case 'doctrineChanged':
         this.doctrineSel.value = e.doctrine;
         break;
+      case 'interception':
+        this.pushLine(
+          `🛡 ${factionById(e.by).name}: ${e.success ? 'ракета сбита' : 'перехват не удался'}`,
+          'abm',
+        );
+        break;
+      case 'ceasefireProposed':
+        this.pushLine(
+          `☮ ${factionById(e.from).name} предлагает перемирие: ${factionById(e.to).name}`,
+          'peace',
+        );
+        if (e.forPlayer) this.showOffer(e.from, e.to);
+        break;
+      case 'ceasefireAccepted':
+        this.pushLine(
+          `☮ Перемирие: ${factionById(e.from).name} и ${factionById(e.to).name}`,
+          'peace',
+        );
+        this.hideOffer(e.from, e.to);
+        break;
+      case 'ceasefireRejected':
+        this.pushLine(`✖ ${factionById(e.to).name} отвергает перемирие`, 'peace');
+        this.hideOffer(e.from, e.to);
+        break;
+      case 'truceBroken':
+        this.pushLine(
+          `⚔ ${factionById(e.by).name} нарушает перемирие с ${factionById(e.against).name}`,
+          'war',
+        );
+        break;
+      case 'gameOver':
+        this.showGameOver(e.outcome, e.winner, e.summary);
+        break;
       case 'statsChanged':
         this.bombsEl.textContent = String(e.bombs);
         this.megatonsEl.textContent = String(e.megatons);
@@ -318,6 +417,9 @@ export class Hud {
       case 'planetReset':
         this.resetGen += 1;
         this.feedEl.replaceChildren();
+        this.offer = undefined;
+        this.offerEl.style.display = 'none';
+        this.overEl.style.display = 'none';
         break;
       case 'labelsToggled':
         this.labelsBtn.classList.toggle('active', e.enabled);
@@ -348,6 +450,89 @@ export class Hud {
       if (gen !== this.resetGen) return; // планета восстановлена раньше, чем долетела волна
       this.pushFeedEntry(name, deaths, faction);
     }, delayMs);
+  }
+
+  // Универсальная строка ленты с классом-стилем (☠ города, ☢ ответы, 🛡 ПРО, ☮ переговоры).
+  private pushLine(text: string, cls: string): void {
+    const div = document.createElement('div');
+    div.className = cls;
+    div.textContent = text;
+    this.feedEl.prepend(div);
+    while (this.feedEl.children.length > FEED_MAX_ENTRIES) this.feedEl.lastChild?.remove();
+  }
+
+  // Входящее предложение перемирия стороне игрока: ждём его решения (молчание симуляция
+  // сама засчитает как отказ по своему таймеру).
+  private showOffer(from: FactionId, to: FactionId): void {
+    this.offer = { from, to };
+    this.offerTextEl.textContent = `${factionById(from).name} предлагает перемирие`;
+    this.offerEl.style.display = '';
+  }
+
+  private hideOffer(from: FactionId, to: FactionId): void {
+    if (this.offer?.from !== from || this.offer.to !== to) return;
+    this.offer = undefined;
+    this.offerEl.style.display = 'none';
+  }
+
+  private answerOffer(accept: boolean): void {
+    if (this.offer === undefined) return;
+    const { from, to } = this.offer;
+    this.offer = undefined;
+    this.offerEl.style.display = 'none';
+    this.host.post({ kind: 'ceasefireResponse', from, to, accept });
+  }
+
+  // Экран итогов партии — создаётся один раз скрытым, наполняется по событию gameOver.
+  private buildGameOver(): { overlay: HTMLElement; body: HTMLElement } {
+    const overlay = document.createElement('div');
+    overlay.id = 'gameover-overlay';
+    overlay.style.display = 'none';
+    overlay.innerHTML = `
+      <div id="gameover">
+        <h2 id="gameover-title"></h2>
+        <div id="gameover-body"></div>
+        <button id="gameover-again">Начать заново</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector<HTMLButtonElement>('#gameover-again')!.addEventListener('click', () => {
+      overlay.style.display = 'none';
+      this.host.post({ kind: 'reset' });
+    });
+    return { overlay, body: overlay.querySelector<HTMLElement>('#gameover-body')! };
+  }
+
+  private showGameOver(
+    outcome: Outcome,
+    winner: FactionId | undefined,
+    summary: SideSummary[],
+  ): void {
+    const title = this.overEl.querySelector<HTMLElement>('#gameover-title')!;
+    title.textContent = winner
+      ? `${OUTCOME_TITLES[outcome]}: ${factionById(winner).name}`
+      : OUTCOME_TITLES[outcome];
+    const rows = summary
+      .map((r) => {
+        const survived = r.popTotal > 0 ? Math.round((r.popAlive / r.popTotal) * 100) : 0;
+        return `<tr${winner === r.id ? ' class="winner"' : ''}>
+          <td><i style="background:${cssColor(r.id)}"></i>${factionById(r.id).name}</td>
+          <td>${survived}%</td>
+          <td>${fmtOrZero(r.popTotal - r.popAlive)}</td>
+          <td>${fmtOrZero(r.killed)}</td>
+          <td>${r.launched}</td>
+          <td>${r.intercepted}</td>
+          <td>${r.arsenal}</td>
+        </tr>`;
+      })
+      .join('');
+    this.overBodyEl.innerHTML = `
+      <table>
+        <tr><th>Сторона</th><th>Выжило</th><th>Потери</th><th>Убито</th><th>Пусков</th><th>Сбито</th><th>☢</th></tr>
+        ${rows}
+      </table>
+    `;
+    this.overEl.style.display = '';
   }
 
   // Строка ленты об ответном ударе — сразу, без задержки волны (это пуск, а не прилёт).

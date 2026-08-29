@@ -2,6 +2,7 @@ import type { Vec3 } from './geo';
 import type { Surface, Biome } from './material';
 import type { FactionId } from './factions';
 import type { Doctrine } from './diplomacy';
+import type { Outcome } from './victory';
 
 // Изменяемое состояние стороны для HUD (статику — название/цвет/исходное население — HUD
 // берёт из sim/factions.ts напрямую, чтобы не гонять её в каждом событии).
@@ -10,7 +11,21 @@ export type FactionStat = {
   popAlive: number; // живое население городов стороны, млн
   citiesAlive: number; // сколько городов ещё не опустошено
   arsenal: number; // осталось боеголовок
-  enemies: FactionId[]; // с кем сторона в войне (спека 2026-08-29-retaliation)
+  interceptors: number; // осталось перехватчиков ПРО
+  // С кем сторона в конфликте: уровень эскалации 1..4 и признак действующего перемирия.
+  enemies: { id: FactionId; level: number; truce: boolean }[];
+};
+
+// Строка экрана итогов по стороне (событие gameOver).
+export type SideSummary = {
+  id: FactionId;
+  popAlive: number;
+  popTotal: number;
+  killed: number; // сколько населения выбили её удары
+  launched: number; // пущено боеголовок
+  intercepted: number; // сбито чужих боеголовок её ПРО
+  arsenal: number;
+  interceptors: number;
 };
 
 // События, которые симуляция эмитит наружу (для рендера/UI/сети).
@@ -55,4 +70,13 @@ export type SimEvent =
       reason: 'revenge' | 'ally';
     }
   | { kind: 'doctrineChanged'; doctrine: Doctrine }
+  // Работа ПРО: by — кто перехватывал, pos — точка вспышки (в радиусах планеты),
+  // success — сбита ли боеголовка (промах тоже тратит перехватчик).
+  | { kind: 'interception'; id: number; by: FactionId; pos: Vec3; success: boolean }
+  // Переговоры: forPlayer — предложение адресовано стороне игрока и ждёт его ответа.
+  | { kind: 'ceasefireProposed'; from: FactionId; to: FactionId; forPlayer: boolean }
+  | { kind: 'ceasefireAccepted'; from: FactionId; to: FactionId }
+  | { kind: 'ceasefireRejected'; from: FactionId; to: FactionId }
+  | { kind: 'truceBroken'; by: FactionId; against: FactionId }
+  | { kind: 'gameOver'; outcome: Outcome; winner?: FactionId; summary: SideSummary[] }
   | { kind: 'labelsToggled'; enabled: boolean };

@@ -1,26 +1,21 @@
-// Дипломатия и ответный удар (спека 2026-08-29-retaliation-design.md): чистые данные и
-// формулы возмездия — без состояния и без three.js. Изменяемое (запланированные ответы,
-// войны) живёт в Simulation.
+// Дипломатия: лестница эскалации, нравы сторон, размер ответа и склонность к переговорам
+// (спеки 2026-08-29-retaliation-design.md и 2026-08-29-abm-escalation-victory-design.md).
+// Чистые данные и формулы — состояние (уровни пар, перемирия) живёт в Simulation.
 
 import {
   SALVO_COUNT,
   RETALIATION_PER_DEATHS,
   RETALIATION_CAP_ESCALATE,
   ALLY_RESPONSE_FRAC,
+  ESCALATION_MAX,
 } from '../assets/config';
 import { BELLIGERENTS, type FactionId } from './factions';
 
-// Доктрина ответа — глобальный режим игры (селект в HUD):
-//   off        — стороны не отвечают (прежняя песочница);
-//   restrained — ответ соразмерен потерям (боеголовка на RETALIATION_PER_DEATHS млн);
-//   escalate   — вдвое от соразмерного (обмен раскручивается);
-//   doomsday   — весь арсенал одной волной (мир кончается за пару обменов).
+// Доктрина — глобальный режим игры: потолок лестницы эскалации и общая склонность
+// договариваться. off — стороны вообще не отвечают (песочница как до фичи).
 export type Doctrine = 'off' | 'restrained' | 'escalate' | 'doomsday';
 
 export const DOCTRINES: readonly Doctrine[] = ['off', 'restrained', 'escalate', 'doomsday'];
-
-// По умолчанию стороны отвечают соразмерно: мир живой, но не заканчивается с первого клика.
-export const DEFAULT_DOCTRINE: Doctrine = 'restrained';
 
 export const DOCTRINE_NAMES: Record<Doctrine, string> = {
   off: 'выкл',
@@ -29,13 +24,59 @@ export const DOCTRINE_NAMES: Record<Doctrine, string> = {
   doomsday: 'всё сразу',
 };
 
+// По умолчанию стороны отвечают сдержанно и охотно ищут мира.
+export const DEFAULT_DOCTRINE: Doctrine = 'restrained';
+
 export function isDoctrine(v: unknown): v is Doctrine {
   return typeof v === 'string' && (DOCTRINES as readonly string[]).includes(v);
 }
 
-// Игровые блоки союзников. Это баланс, а не утверждение о реальных союзах: удар по стороне
-// втягивает её блок, и обмен расходится по миру, а не остаётся дуэлью. Индия и Пакистан
-// намеренно без союзников — их обмен остаётся локальным.
+// Потолок лестницы эскалации для доктрины: до какого уровня стороны готовы дойти.
+export function doctrineCeiling(d: Doctrine): number {
+  switch (d) {
+    case 'off':
+      return 0;
+    case 'restrained':
+      return 2;
+    case 'escalate':
+      return 3;
+    case 'doomsday':
+      return ESCALATION_MAX;
+  }
+}
+
+// Уровни отношений пары сторон — для HUD и ленты.
+export const ESCALATION_NAMES: readonly string[] = [
+  'мир',
+  'кризис',
+  'ограниченная война',
+  'полномасштабная война',
+  'тотальная война',
+];
+
+export function escalationName(level: number): string {
+  return ESCALATION_NAMES[Math.max(0, Math.min(ESCALATION_MAX, level))]!;
+}
+
+// Нрав стороны: насколько охотно она садится за стол переговоров и как быстро зверствует.
+export type Temperament = 'dove' | 'balanced' | 'hawk';
+
+export const TEMPERAMENTS: Record<FactionId, Temperament> = {
+  usa: 'balanced',
+  russia: 'hawk',
+  china: 'balanced',
+  europe: 'dove',
+  india: 'balanced',
+  pakistan: 'hawk',
+  dprk: 'hawk',
+  israel: 'hawk',
+  neutral: 'dove',
+};
+
+const TEMPERAMENT_PEACE: Record<Temperament, number> = { dove: 0.45, balanced: 0.3, hawk: 0.15 };
+
+// Игровые блоки союзников (баланс, не утверждение о реальных союзах): удар по стороне
+// втягивает её блок. Индия и Пакистан намеренно без союзников — их обмен локален.
 const BLOCS: readonly (readonly FactionId[])[] = [
   ['usa', 'europe', 'israel'],
   ['russia', 'china', 'dprk'],
@@ -47,33 +88,52 @@ for (const f of BELLIGERENTS) {
   ALLIES.set(f.id, bloc ? bloc.filter((id) => id !== f.id) : []);
 }
 
-// Союзники стороны (без неё самой). Нейтральные ни с кем не связаны.
 export function alliesOf(id: FactionId): readonly FactionId[] {
   return ALLIES.get(id) ?? [];
 }
 
-// Сколько ракет поднимает сторона в ответ: соразмерно погибшим (grievance, млн), с поправкой
-// на доктрину, вполовину — если вступается за союзника, и не больше остатка арсенала.
-// Ноль означает «ответа не будет» (доктрина off или пустой арсенал).
-export function responseSize(
+// Размер ответной волны по уровню эскалации пары (спека §3):
+//   1 — демонстрация (одна ракета), 2 — соразмерно потерям, 3 — вдвое, 4 — весь арсенал.
+// Союзник вступается вполовину меньшими силами, но не меньше одной ракеты.
+export function responseSizeForLevel(
+  level: number,
   grievance: number,
   arsenal: number,
-  doctrine: Doctrine,
   ally: boolean,
 ): number {
-  if (doctrine === 'off' || arsenal <= 0) return 0;
+  if (level <= 0 || arsenal <= 0) return 0;
 
+  const proportional = Math.max(1, Math.ceil(grievance / RETALIATION_PER_DEATHS));
   let size: number;
-  if (doctrine === 'doomsday') {
-    size = Math.min(arsenal, RETALIATION_CAP_ESCALATE);
-  } else {
-    const base = Math.max(1, Math.ceil(grievance / RETALIATION_PER_DEATHS));
-    size =
-      doctrine === 'escalate'
-        ? Math.min(base * 2, RETALIATION_CAP_ESCALATE)
-        : Math.min(base, SALVO_COUNT);
-  }
-  // За союзника вступаются меньшими силами — но хотя бы одной ракетой.
+  if (level === 1) size = 1;
+  else if (level === 2) size = Math.min(proportional, SALVO_COUNT);
+  else if (level === 3) size = Math.min(proportional * 2, RETALIATION_CAP_ESCALATE);
+  else size = Math.min(arsenal, RETALIATION_CAP_ESCALATE);
+
   if (ally) size = Math.max(1, Math.ceil(size * ALLY_RESPONSE_FRAC));
   return Math.min(size, arsenal);
+}
+
+// Готовность стороны пойти на перемирие (0..1): растёт от полученного урона и опустевающего
+// арсенала, падает с накалом; нрав и доктрина сдвигают базу. При doomsday/off переговоров нет.
+export function peaceWillingness(opts: {
+  temperament: Temperament;
+  doctrine: Doctrine;
+  level: number;
+  damageFrac: number; // доля потерянного населения 0..1
+  arsenalFrac: number; // остаток арсенала 0..1
+}): number {
+  const { temperament, doctrine, level, damageFrac, arsenalFrac } = opts;
+  if (doctrine === 'doomsday' || doctrine === 'off') return 0;
+
+  let p = TEMPERAMENT_PEACE[temperament];
+  p += clamp01(damageFrac) * 0.5;
+  p += (1 - clamp01(arsenalFrac)) * 0.3;
+  p -= Math.max(0, level - 1) * 0.08;
+  p += doctrine === 'restrained' ? 0.15 : -0.05;
+  return Math.max(0, Math.min(0.95, p));
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
