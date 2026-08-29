@@ -8,10 +8,12 @@ import './styles.css';
 import type { SimHost } from '../sim/SimHost';
 import type { SimEvent, FactionStat } from '../sim/events';
 import { FACTIONS, BELLIGERENTS, factionById, type FactionId } from '../sim/factions';
+import { DOCTRINES, DOCTRINE_NAMES, DEFAULT_DOCTRINE, type Doctrine } from '../sim/diplomacy';
 import { createCities } from '../sim/cities';
 
 const DEFAULT_YIELD = 100;
-const FEED_MAX_ENTRIES = 5;
+// 7 (было 5): в ленте теперь два потока — погибшие города и пуски ответных ударов.
+const FEED_MAX_ENTRIES = 7;
 // Ниже этой доли исходного населения сторона считается павшей (значок ☠, строка гаснет).
 const FACTION_FALLEN_FRAC = 0.01;
 // Значение «случайно» в селектах сторон: пустая строка → поле команды не задаётся,
@@ -24,6 +26,15 @@ function totalPops(): Map<FactionId, number> {
   const totals = new Map<FactionId, number>(FACTIONS.map((f) => [f.id, 0]));
   for (const c of createCities()) totals.set(c.faction, (totals.get(c.faction) ?? 0) + c.pop);
   return totals;
+}
+
+// Склонение слова «ракета» по числу — для строк ленты об ответных ударах.
+function plural(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'ракета';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'ракеты';
+  return 'ракет';
 }
 
 // Цвет стороны в CSS (компоненты хранятся в 0..1).
@@ -61,12 +72,13 @@ export class Hud {
   // Панель сторон (спека 2026-08-29): строка на фракцию, DOM трогаем только при смене текста.
   private readonly factionRows = new Map<
     FactionId,
-    { pop: HTMLElement; ars: HTMLElement; row: HTMLElement }
+    { pop: HTMLElement; ars: HTMLElement; war: HTMLElement; row: HTMLElement }
   >();
   private readonly factionTotals = totalPops();
   private readonly attackerSel: HTMLSelectElement;
   private readonly targetSel: HTMLSelectElement;
   private readonly salvoBtn: HTMLButtonElement;
+  private readonly doctrineSel: HTMLSelectElement; // режим ответных ударов (спека 2026-08-29)
   private lastStats: FactionStat[] = [];
 
   // Метка времени (performance.now()) последнего explosionStarted — база задержки atWaveTime
@@ -92,14 +104,18 @@ export class Hud {
         <button data-yield="100" class="active">100 Мт</button>
       </div>
       <div class="row" id="salvo-sides">
-        <select id="attacker" title="кто наносит удар"></select>
+        <select id="attacker" title="за кого играем: этой стороне приписываются и клик, и залп"></select>
         <span class="arrow">→</span>
         <select id="target" title="по кому удар"></select>
+      </div>
+      <div class="row" id="doctrine-row">
+        <span class="label">Ответный удар</span>
+        <select id="doctrine" title="как стороны отвечают на удары по себе"></select>
       </div>
       <button id="salvo" style="width: 100%; margin-bottom: 8px">☢ Залп МБР</button>
       <button id="reset">Восстановить планету</button>
       <button id="labels" class="active" style="width: 100%; margin-top: 8px">Границы и названия: вкл</button>
-      <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар</p>
+      <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар выбранной стороны</p>
       <p id="credit">Границы и названия: Esri</p>
     `;
     document.body.appendChild(root);
@@ -116,8 +132,10 @@ export class Hud {
     this.attackerSel = root.querySelector<HTMLSelectElement>('#attacker')!;
     this.targetSel = root.querySelector<HTMLSelectElement>('#target')!;
     this.salvoBtn = root.querySelector<HTMLButtonElement>('#salvo')!;
+    this.doctrineSel = root.querySelector<HTMLSelectElement>('#doctrine')!;
     this.buildFactionRows(root.querySelector<HTMLElement>('#factions')!);
     this.buildSideSelects();
+    this.buildDoctrineSelect();
 
     for (const btn of this.yieldButtons) {
       btn.addEventListener('click', () => this.selectYield(btn));
@@ -137,6 +155,10 @@ export class Hud {
     // Смена агрессора может сделать залп невозможным (нет боеголовок/городов) — кнопка
     // гаснет сразу, не дожидаясь следующего события симуляции.
     this.attackerSel.addEventListener('change', () => this.updateSalvoButton());
+    // Доктрина ответа — состояние симуляции: селект отражает её только по doctrineChanged.
+    this.doctrineSel.addEventListener('change', () =>
+      this.host.post({ kind: 'setDoctrine', doctrine: this.doctrineSel.value as Doctrine }),
+    );
     // Подпись/активность кнопки границ обновляется только по факту labelsToggled от sim —
     // сам клик не трогает DOM сразу (см. onEvent), чтобы UI всегда отражал состояние sim.
     this.labelsBtn.addEventListener('click', () => this.host.post({ kind: 'toggleLabels' }));
@@ -153,13 +175,15 @@ export class Hud {
       const name = document.createElement('span');
       name.className = 'f-name';
       name.textContent = f.name;
+      const war = document.createElement('span');
+      war.className = 'f-war'; // ⚔ — сторона в войне (title перечисляет с кем)
       const pop = document.createElement('span');
       pop.className = 'f-pop';
       const ars = document.createElement('span');
       ars.className = 'f-ars';
-      row.append(dot, name, pop, ars);
+      row.append(dot, name, war, pop, ars);
       container.append(row);
-      this.factionRows.set(f.id, { pop, ars, row });
+      this.factionRows.set(f.id, { pop, ars, war, row });
     }
   }
 
@@ -180,6 +204,18 @@ export class Hud {
     };
     fill(this.attackerSel, BELLIGERENTS);
     fill(this.targetSel, FACTIONS);
+  }
+
+  // Доктрина ответа: чем сторона отвечает на удар по себе. Значение ставит симуляция
+  // (событие doctrineChanged) — селект лишь показывает её состояние.
+  private buildDoctrineSelect(): void {
+    for (const d of DOCTRINES) {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = DOCTRINE_NAMES[d];
+      this.doctrineSel.append(opt);
+    }
+    this.doctrineSel.value = DEFAULT_DOCTRINE;
   }
 
   // Кнопка залпа гаснет, когда пускать некому: у выбранного агрессора нет боеголовок или
@@ -208,6 +244,12 @@ export class Hud {
       // Нейтральные не воюют — арсенала у них нет и колонка остаётся пустой.
       const ars = s.id === 'neutral' ? '' : `☢ ${s.arsenal}`;
       if (row.ars.textContent !== ars) row.ars.textContent = ars;
+      // Война: значок ⚔ и список противников в подсказке.
+      const war = s.enemies.length > 0 ? '⚔' : '';
+      if (row.war.textContent !== war) {
+        row.war.textContent = war;
+        row.war.title = s.enemies.map((id) => factionById(id).name).join(', ');
+      }
       row.row.classList.toggle('fallen', fallen);
     }
     this.updateSalvoButton();
@@ -216,6 +258,13 @@ export class Hud {
   // Текущая выбранная мощность заряда — читается main.ts при клике по глобусу.
   get currentYield(): number {
     return this._currentYield;
+  }
+
+  // Сторона игрока (селект «кто бьёт»): ей приписывается ручной удар, и мстят именно ей.
+  // «случайно» → undefined: удар анонимный, жертва винит случайную сторону (спека §2).
+  get currentSide(): FactionId | undefined {
+    const v = this.attackerSel.value;
+    return v === ANY ? undefined : (v as FactionId);
   }
 
   private selectYield(selected: HTMLButtonElement): void {
@@ -255,6 +304,12 @@ export class Hud {
       case 'factionsChanged':
         this.updateFactions(e.factions);
         break;
+      case 'retaliationLaunched':
+        this.pushWarEntry(e.from, e.to, e.count, e.reason);
+        break;
+      case 'doctrineChanged':
+        this.doctrineSel.value = e.doctrine;
+        break;
       case 'statsChanged':
         this.bombsEl.textContent = String(e.bombs);
         this.megatonsEl.textContent = String(e.megatons);
@@ -293,6 +348,21 @@ export class Hud {
       if (gen !== this.resetGen) return; // планета восстановлена раньше, чем долетела волна
       this.pushFeedEntry(name, deaths, faction);
     }, delayMs);
+  }
+
+  // Строка ленты об ответном ударе — сразу, без задержки волны (это пуск, а не прилёт).
+  private pushWarEntry(
+    from: FactionId,
+    to: FactionId,
+    count: number,
+    reason: 'revenge' | 'ally',
+  ): void {
+    const div = document.createElement('div');
+    div.className = 'war';
+    const why = reason === 'ally' ? 'за союзника' : 'ответный удар';
+    div.textContent = `☢ ${factionById(from).name} → ${factionById(to).name}: ${count} ${plural(count)} (${why})`;
+    this.feedEl.prepend(div);
+    while (this.feedEl.children.length > FEED_MAX_ENTRIES) this.feedEl.lastChild?.remove();
   }
 
   private pushFeedEntry(name: string, deaths: number, faction: FactionId): void {

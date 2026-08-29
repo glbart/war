@@ -218,3 +218,17 @@ export const MARKER_POP_REF = 20; // млн — население «крупн�
 // Опустошённый город не исчезает совсем: тёмная мелкая точка на месте агломерации.
 export const MARKER_DEAD_SIZE_FRAC = 0.35;
 export const MARKER_DEAD_COLOR_FRAC = 0.2;
+
+// ---------- Дипломатия и ответный удар (спека 2026-08-29-retaliation-design.md) ----------
+// Задержка реакции стороны на удар (сек): волны обмена читаются глазом, а не сливаются.
+export const RETALIATION_DELAY_MIN = 3;
+export const RETALIATION_DELAY_MAX = 6;
+// Союзник вступается позже — добавка к задержке (сек).
+export const ALLY_DELAY_EXTRA_MIN = 2;
+export const ALLY_DELAY_EXTRA_MAX = 5;
+// Соразмерность: одна боеголовка ответа на столько млн погибших.
+export const RETALIATION_PER_DEATHS = 6;
+// Потолок волны при эскалации/doomsday. Он же бережёт пул ракет рендера (24 слота).
+export const RETALIATION_CAP_ESCALATE = 12;
+// Доля от расчётного залпа, которой вступается союзник.
+export const ALLY_RESPONSE_FRAC = 0.5;

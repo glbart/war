@@ -78,6 +78,10 @@
 #feed div {
   animation: feedIn 0.4s ease-out;
 }
+/* Строки об ответных ударах — отличаются от строк о погибших городах. */
+#feed div.war {
+  color: #ffcc66;
+}
 @keyframes feedIn {
   from {
     opacity: 0;
@@ -112,6 +116,11 @@
 #factions .f-name {
   flex: 1;
 }
+#factions .f-war {
+  color: #ff8f7a;
+  flex: none;
+  width: 10px;
+}
 #factions .f-pop {
   color: #ff9b5e;
   white-space: nowrap;
@@ -122,9 +131,14 @@
   color: #7d93b8;
   white-space: nowrap;
 }
-#salvo-sides {
+#salvo-sides,
+#doctrine-row {
   align-items: center;
   font-size: 11px;
+}
+#doctrine-row .label {
+  color: #7d93b8;
+  flex: none;
 }
 #salvo-sides .arrow {
   color: #7d93b8;

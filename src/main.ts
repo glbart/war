@@ -73,9 +73,10 @@ async function boot() {
   // AudioContext без него) — как в эталоне (ensureAudio() на pointerdown).
   window.addEventListener('pointerdown', () => ensureAudio(), { once: true });
 
-  // Клик по глобусу → detonate с мощностью, выбранной кнопками Hud.
+  // Клик по глобусу → detonate с мощностью и стороной, выбранными в Hud (сторона нужна для
+  // атрибуции ответного удара: жертва мстит именно ей; «случайно» → анонимный удар).
   const pointer = new PointerController(canvas, renderer.ctx, globe, rig, (dir) => {
-    host.post({ kind: 'detonate', dir, yield: hud.currentYield });
+    host.post({ kind: 'detonate', dir, yield: hud.currentYield, faction: hud.currentSide });
   });
 
   // Мост sim↔render: ракеты, взрывы (огонь/волна/частицы), кратеры-декали, тряска камеры, звук.
