@@ -75,6 +75,7 @@ export class Simulation {
   // Арсеналы сторон (спека 2026-08-29): тратятся по боеголовке на ракету залпа,
   // восстанавливаются на reset. Нейтральные держат 0 и агрессором не выбираются.
   private arsenals = new Map<FactionId, number>();
+  private bootstrapped = false; // выдан ли стартовый factionsChanged (первый тик)
 
   constructor(seed: number) {
     this.rng = new Rng(seed);
@@ -90,6 +91,14 @@ export class Simulation {
   // все события, произошедшие за тик (в порядке: команды, затем взрывы).
   step(dt: number, commands: Command[]): SimEvent[] {
     const events: SimEvent[] = [];
+
+    // Стартовый снимок сторон — первым событием первого тика: HUD получает население и
+    // арсеналы тем же путём, что и все дальнейшие изменения, без отдельного «начального
+    // состояния» на его стороне (симуляция остаётся единственным источником истины).
+    if (!this.bootstrapped) {
+      this.bootstrapped = true;
+      events.push(this.factionsEvent());
+    }
 
     for (const cmd of commands) this.applyCommand(cmd, events);
     this.runMissiles(dt, events);

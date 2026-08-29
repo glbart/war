@@ -7,15 +7,7 @@
 // красит тест. Город, не попавший ни в один список, — 'neutral'.
 
 export type FactionId =
-  | 'usa'
-  | 'russia'
-  | 'china'
-  | 'europe'
-  | 'india'
-  | 'pakistan'
-  | 'dprk'
-  | 'israel'
-  | 'neutral';
+  'usa' | 'russia' | 'china' | 'europe' | 'india' | 'pakistan' | 'dprk' | 'israel' | 'neutral';
 
 export interface Faction {
   id: FactionId;
