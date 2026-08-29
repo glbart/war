@@ -1,15 +1,43 @@
 import { Rng } from '../core/time';
 import { createWorld } from '../ecs/world';
 import type { Entity } from '../ecs/components';
-import { computeCasualties } from '../ecs/systems/CasualtySystem';
+import { computeCasualties, type CasualtyHit } from '../ecs/systems/CasualtySystem';
 import { createCities, type City } from './cities';
 import type { Command } from './commands';
-import type { SimEvent, FactionStat } from './events';
-import { YIELDS, SALVO_COUNT, FACTION_LAUNCH_JITTER, type Yield } from '../assets/config';
+import type { SimEvent, FactionStat, SideSummary } from './events';
+import {
+  YIELDS,
+  SALVO_COUNT,
+  FACTION_LAUNCH_JITTER,
+  RETALIATION_DELAY_MIN,
+  RETALIATION_DELAY_MAX,
+  ALLY_DELAY_EXTRA_MIN,
+  ALLY_DELAY_EXTRA_MAX,
+  ABM_INTERCEPT_AT,
+  ESCALATION_DECAY_T,
+  TRUCE_T,
+  PEACE_OFFER_TIMEOUT,
+  PEACE_COOLDOWN_T,
+  PEACE_HOLD_T,
+  type Yield,
+} from '../assets/config';
 import { materialAtDir } from './material';
 import { angleBetween, jitterDir, type Vec3 } from './geo';
-import { flightTimeFor } from './ballistics';
+import { flightTimeFor, ballisticPos, spaceStrikePos } from './ballistics';
+
 import { FACTIONS, BELLIGERENTS, isFactionId, type FactionId } from './factions';
+import {
+  alliesOf,
+  responseSizeForLevel,
+  peaceWillingness,
+  doctrineCeiling,
+  isDoctrine,
+  DEFAULT_DOCTRINE,
+  TEMPERAMENTS,
+  type Doctrine,
+} from './diplomacy';
+import { DEFENSES, interceptChance, defenderFor } from './defense';
+import { evaluateOutcome, type Outcome, type SideSnapshot } from './victory';
 
 // Время полёта боеголовки до детонации, сек (порт таймингов демо).
 const FLIGHT_TIME = 2.6;
@@ -17,10 +45,39 @@ const FLIGHT_TIME = 2.6;
 // Порог «город ещё жив» — тот же, по которому CasualtySystem пропускает опустошённые города.
 const ALIVE_EPS = 0.001;
 
+// Запланированный ответный удар стороны (спека 2026-08-29-retaliation): пока идёт реакция,
+// новые попадания добавляют погибших в ту же запись, а не плодят отдельные волны.
+// Отношения пары сторон: уровень лестницы эскалации, тишина (для спада уровня), остаток
+// перемирия и пауза между предложениями мира (спека 2026-08-29-abm-escalation-victory §3).
+interface Relation {
+  level: number;
+  quiet: number;
+  truce: number;
+  cooldown: number;
+}
+
+// Предложение перемирия, адресованное стороне ИГРОКА и ждущее его ответа (молчание = отказ).
+interface PeaceOffer {
+  from: FactionId;
+  to: FactionId;
+  t: number;
+}
+
+interface Retaliation {
+  t: number; // сек до пуска
+  grievance: number; // накопленные потери (млн) — из них считается размер ответа
+  target: FactionId; // кому мстим
+  ally: boolean; // вступаемся за союзника (ответ вполовину меньше)
+}
+
 // Сколько раз пробуем найти сушу под пусковую площадку рядом с городом, прежде чем уйти
 // в общий фолбэк (случайная точка суши): города прибрежные, грубая landmask вокруг них
 // местами вода — упереться в лимит нормально, зависнуть нельзя.
 const LAUNCH_SITE_TRIES = 8;
+
+// Как часто симуляция разбирает горячие пары на предмет переговоров (сек). Реже, чем тик:
+// переговоры — редкое событие, а не ежекадровая работа.
+const PEACE_CHECK_T = 5;
 
 // Мощности заряда, поддерживаемые демо (мегатонны).
 type YieldMt = Yield;
@@ -76,15 +133,39 @@ export class Simulation {
   // восстанавливаются на reset. Нейтральные держат 0 и агрессором не выбираются.
   private arsenals = new Map<FactionId, number>();
   private bootstrapped = false; // выдан ли стартовый factionsChanged (первый тик)
+  // Дипломатия (спека 2026-08-29-retaliation): режим ответа, отложенные ответы, состояние войн.
+  private doctrine: Doctrine = DEFAULT_DOCTRINE;
+  private readonly pending = new Map<FactionId, Retaliation>();
+  private relations = new Map<string, Relation>();
+  private offers: PeaceOffer[] = [];
+  private playerSide: FactionId | undefined; // за кого играет пользователь (setSide)
+  // ПРО: остаток перехватчиков по сторонам (спека §2).
+  private interceptors = new Map<FactionId, number>();
+  // Итоги партии: счётчики для экрана итогов и состояние исхода.
+  private launchedBy = new Map<FactionId, number>();
+  private killedBy = new Map<FactionId, number>();
+  private interceptedBy = new Map<FactionId, number>();
+  private readonly popTotals = new Map<FactionId, number>();
+  private warHappened = false;
+  private quietFor = 0; // сек с последнего взрыва (для исхода «мир восстановлен»)
+  private peaceCheckAcc = 0;
+  private outcome: Outcome | undefined;
 
   constructor(seed: number) {
     this.rng = new Rng(seed);
     this.cities = createCities();
+    for (const c of this.cities) {
+      this.popTotals.set(c.faction, (this.popTotals.get(c.faction) ?? 0) + c.pop);
+    }
     this.resetArsenals();
   }
 
   private resetArsenals(): void {
     this.arsenals = new Map(FACTIONS.map((f) => [f.id, f.arsenal]));
+    this.interceptors = new Map(FACTIONS.map((f) => [f.id, DEFENSES[f.id].interceptors]));
+    this.launchedBy = new Map();
+    this.killedBy = new Map();
+    this.interceptedBy = new Map();
   }
 
   // Продвигает симуляцию на dt секунд, применяя команды этого тика; возвращает
@@ -102,6 +183,11 @@ export class Simulation {
 
     for (const cmd of commands) this.applyCommand(cmd, events);
     this.runMissiles(dt, events);
+    this.runRetaliations(dt, events);
+    this.tickRelations(dt);
+    this.runDiplomacy(dt, events);
+    this.quietFor += dt;
+    this.checkOutcome(events);
 
     return events;
   }
@@ -110,6 +196,7 @@ export class Simulation {
     switch (cmd.kind) {
       case 'detonate': {
         assertValidYield(cmd.yield);
+        assertValidFaction(cmd.faction);
         const id = this.nextId++;
         const entity = this.world.add({
           warhead: {
@@ -118,15 +205,20 @@ export class Simulation {
             t: 0,
             flightTime: FLIGHT_TIME,
             dir: cmd.dir,
+            faction: cmd.faction,
           },
         });
         this.ids.set(entity, id);
+        if (cmd.faction !== undefined) {
+          this.launchedBy.set(cmd.faction, (this.launchedBy.get(cmd.faction) ?? 0) + 1);
+        }
         events.push({
           kind: 'missileLaunched',
           id,
           dir: cmd.dir,
           yield: cmd.yield,
           flightTime: FLIGHT_TIME,
+          faction: cmd.faction,
         });
         break;
       }
@@ -136,6 +228,29 @@ export class Simulation {
       case 'setYield':
         assertValidYield(cmd.yield);
         this.currentYield = cmd.yield;
+        break;
+      case 'setSide':
+        assertValidFaction(cmd.faction);
+        this.playerSide = cmd.faction;
+        break;
+      case 'proposeCeasefire':
+        assertValidFaction(cmd.from);
+        assertValidFaction(cmd.to);
+        this.handleProposal(cmd.from, cmd.to, events);
+        break;
+      case 'ceasefireResponse':
+        assertValidFaction(cmd.from);
+        assertValidFaction(cmd.to);
+        this.answerOffer(cmd.from, cmd.to, cmd.accept, events);
+        break;
+      case 'setDoctrine':
+        if (!isDoctrine(cmd.doctrine)) {
+          throw new Error(`Неизвестная доктрина ответа: ${String(cmd.doctrine)}.`);
+        }
+        this.doctrine = cmd.doctrine;
+        // Выключенная доктрина снимает уже запланированные ответы: «выкл» значит выкл.
+        if (this.doctrine === 'off') this.pending.clear();
+        events.push({ kind: 'doctrineChanged', doctrine: this.doctrine });
         break;
       case 'reset':
         this.applyReset(events);
@@ -210,25 +325,21 @@ export class Simulation {
     return this.randomLandDir();
   }
 
-  // Залп МБР (спека 2026-08-29, развитие спеки 2026-07-14): сторона-агрессор пускает
-  // min(SALVO_COUNT, арсенал) ракет со своей территории по живым городам стороны-цели,
-  // тратя боеголовки. Мощность — текущая выбранная (setYield); время полёта — от дальности.
-  private applySalvo(
-    from: FactionId | undefined,
-    to: FactionId | undefined,
+  // Общий пуск: сторона поднимает count ракет со своей территории по городам из targets,
+  // списывая боеголовки. Используется и кнопкой залпа, и ответным ударом. Возвращает,
+  // сколько ракет реально поднято (ограничение — арсенал).
+  private launchSalvo(
+    attacker: FactionId,
+    targets: City[],
+    count: number,
     events: SimEvent[],
-  ): void {
+  ): number {
     assertValidYield(this.currentYield);
-    assertValidFaction(from);
-    assertValidFaction(to);
-    const attacker = this.pickAttacker(from);
-    if (attacker === undefined) return; // пускать некому — молчаливый no-op (HUD гасит кнопку)
-
     const sites = this.citiesOf(attacker);
-    const targets = this.pickTargets(attacker, to);
-    const count = Math.min(SALVO_COUNT, this.arsenals.get(attacker) ?? 0);
+    const n = Math.max(0, Math.min(count, this.arsenals.get(attacker) ?? 0));
+    if (n === 0 || sites.length === 0) return 0;
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < n; i++) {
       const site = sites[this.rng.int(sites.length)]!;
       const launch = this.launchSiteNear(site.dir);
       const target =
@@ -243,6 +354,7 @@ export class Simulation {
           flightTime,
           dir: target,
           from: launch,
+          faction: attacker,
         },
       });
       this.ids.set(entity, id);
@@ -257,8 +369,269 @@ export class Simulation {
       });
     }
 
-    this.arsenals.set(attacker, (this.arsenals.get(attacker) ?? 0) - count);
+    this.arsenals.set(attacker, (this.arsenals.get(attacker) ?? 0) - n);
+    this.launchedBy.set(attacker, (this.launchedBy.get(attacker) ?? 0) + n);
+    return n;
+  }
+
+  // Залп МБР по кнопке (спека 2026-08-29, развитие спеки 2026-07-14): сторона-агрессор
+  // пускает min(SALVO_COUNT, арсенал) ракет по живым городам стороны-цели.
+  private applySalvo(
+    from: FactionId | undefined,
+    to: FactionId | undefined,
+    events: SimEvent[],
+  ): void {
+    assertValidYield(this.currentYield);
+    assertValidFaction(from);
+    assertValidFaction(to);
+    const attacker = this.pickAttacker(from);
+    if (attacker === undefined) return; // пускать некому — молчаливый no-op (HUD гасит кнопку)
+
+    const targets = this.pickTargets(attacker, to);
+    this.launchSalvo(attacker, targets, SALVO_COUNT, events);
     events.push(this.factionsEvent());
+  }
+
+  // ---------- Дипломатия: атрибуция удара, планирование и пуск ответа ----------
+
+  // ---- Лестница эскалации: отношения пары сторон (спека 2026-08-29-abm-escalation §3) ----
+
+  private static relKey(a: FactionId, b: FactionId): string {
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+  }
+
+  private relation(a: FactionId, b: FactionId): Relation {
+    const key = Simulation.relKey(a, b);
+    let rel = this.relations.get(key);
+    if (rel === undefined) {
+      rel = { level: 0, quiet: 0, truce: 0, cooldown: 0 };
+      this.relations.set(key, rel);
+    }
+    return rel;
+  }
+
+  private levelBetween(a: FactionId, b: FactionId): number {
+    return this.relations.get(Simulation.relKey(a, b))?.level ?? 0;
+  }
+
+  private inTruce(a: FactionId, b: FactionId): boolean {
+    return (this.relations.get(Simulation.relKey(a, b))?.truce ?? 0) > 0;
+  }
+
+  // Удар поднимает пару на ступень (не выше потолка доктрины) и ломает перемирие, если было.
+  private escalate(victim: FactionId, blame: FactionId, events: SimEvent[]): number {
+    const rel = this.relation(victim, blame);
+    if (rel.truce > 0) {
+      rel.truce = 0;
+      events.push({ kind: 'truceBroken', by: blame, against: victim });
+    }
+    rel.level = Math.min(doctrineCeiling(this.doctrine), rel.level + 1);
+    rel.quiet = 0;
+    this.warHappened = true;
+    return rel.level;
+  }
+
+  // Ход времени в отношениях: затишье снижает накал, перемирия и паузы переговоров тают.
+  private tickRelations(dt: number): void {
+    for (const rel of this.relations.values()) {
+      rel.truce = Math.max(0, rel.truce - dt);
+      rel.cooldown = Math.max(0, rel.cooldown - dt);
+      rel.quiet += dt;
+      if (rel.level > 0 && rel.quiet >= ESCALATION_DECAY_T) {
+        rel.level -= 1;
+        rel.quiet = 0;
+      }
+    }
+  }
+
+  // ---- Переговоры ----
+
+  private damageFrac(id: FactionId): number {
+    const total = this.popTotals.get(id) ?? 0;
+    if (total <= 0) return 0;
+    const alive = this.cities
+      .filter((c) => c.faction === id)
+      .reduce((sum, c) => sum + Math.max(0, c.alive), 0);
+    return 1 - alive / total;
+  }
+
+  private willingness(id: FactionId, level: number): number {
+    const start = FACTIONS.find((f) => f.id === id)?.arsenal ?? 1;
+    return peaceWillingness({
+      temperament: TEMPERAMENTS[id],
+      doctrine: this.doctrine,
+      level,
+      damageFrac: this.damageFrac(id),
+      arsenalFrac: start > 0 ? (this.arsenals.get(id) ?? 0) / start : 0,
+    });
+  }
+
+  // Раз в PEACE_CHECK_T разбираем горячие пары: та сторона, что сильнее хочет мира, может
+  // предложить перемирие. Предложение стороне игрока уходит в HUD и ждёт его ответа.
+  private runDiplomacy(dt: number, events: SimEvent[]): void {
+    // Истёкшие предложения игроку — молчание считается отказом.
+    for (const offer of [...this.offers]) {
+      offer.t -= dt;
+      if (offer.t > 0) continue;
+      this.offers = this.offers.filter((o) => o !== offer);
+      events.push({ kind: 'ceasefireRejected', from: offer.from, to: offer.to });
+    }
+
+    this.peaceCheckAcc += dt;
+    if (this.peaceCheckAcc < PEACE_CHECK_T) return;
+    this.peaceCheckAcc = 0;
+    if (this.doctrine === 'off' || this.doctrine === 'doomsday') return;
+
+    for (const [key, rel] of this.relations) {
+      if (rel.level <= 0 || rel.truce > 0 || rel.cooldown > 0) continue;
+      const [a, b] = key.split('|') as [FactionId, FactionId];
+      const wa = this.willingness(a, rel.level);
+      const wb = this.willingness(b, rel.level);
+      const from = wa >= wb ? a : b;
+      const to = from === a ? b : a;
+      if (this.rng.next() >= Math.max(wa, wb)) continue;
+      rel.cooldown = PEACE_COOLDOWN_T;
+      this.handleProposal(from, to, events);
+    }
+  }
+
+  // Предложение перемирия: стороне игрока — в HUD с таймером, ИИ решает сразу.
+  private handleProposal(from: FactionId, to: FactionId, events: SimEvent[]): void {
+    if (from === to) return;
+    const rel = this.relation(from, to);
+    if (rel.truce > 0) return; // уже мир
+    const forPlayer = to === this.playerSide;
+    events.push({ kind: 'ceasefireProposed', from, to, forPlayer });
+    if (forPlayer) {
+      this.offers.push({ from, to, t: PEACE_OFFER_TIMEOUT });
+      return;
+    }
+    const accept = this.rng.next() < this.willingness(to, rel.level);
+    this.answerOffer(from, to, accept, events);
+  }
+
+  // Ответ на предложение (игрока или ИИ). Согласие обнуляет накал, даёт перемирие и снимает
+  // уже запланированные ответы этой пары — иначе «мир» тут же сорвётся своей же ракетой.
+  private answerOffer(from: FactionId, to: FactionId, accept: boolean, events: SimEvent[]): void {
+    this.offers = this.offers.filter((o) => !(o.from === from && o.to === to));
+    if (!accept) {
+      events.push({ kind: 'ceasefireRejected', from, to });
+      return;
+    }
+    const rel = this.relation(from, to);
+    rel.level = 0;
+    rel.truce = TRUCE_T;
+    rel.quiet = 0;
+    for (const [id, plan] of [...this.pending]) {
+      const pair = (id === from && plan.target === to) || (id === to && plan.target === from);
+      if (pair) this.pending.delete(id);
+    }
+    events.push({ kind: 'ceasefireAccepted', from, to });
+    events.push(this.factionsEvent());
+  }
+
+  // Кого винить за удар: явную сторону боеголовки, а при анонимном ударе (ручной клик без
+  // выбранной стороны) — случайную ДРУГУЮ воюющую сторону. Это сознательная механика
+  // песочницы: анонимный удар всё равно раскручивает мир (спека §2).
+  private blameFor(victim: FactionId, attacker: FactionId | undefined): FactionId | undefined {
+    if (attacker !== undefined) return attacker === victim ? undefined : attacker;
+    const suspects = BELLIGERENTS.filter((f) => f.id !== victim);
+    return suspects.length > 0 ? suspects[this.rng.int(suspects.length)]!.id : undefined;
+  }
+
+  // Ставит/дополняет запланированный ответ стороны. Повторные попадания в окне реакции
+  // копят обиду в ТОЙ ЖЕ записи (залп из шести ракет = один ответ, а не шесть) и не
+  // отодвигают срок; прямая месть перебивает статус «вступаюсь за союзника».
+  private schedule(
+    id: FactionId,
+    target: FactionId,
+    grievance: number,
+    ally: boolean,
+    delay: number,
+  ): void {
+    const cur = this.pending.get(id);
+    if (cur === undefined) {
+      this.pending.set(id, { t: delay, grievance, target, ally });
+      return;
+    }
+    cur.grievance += grievance;
+    cur.target = target;
+    cur.ally = cur.ally && ally;
+    cur.t = Math.min(cur.t, delay);
+  }
+
+  // Разбор последствий взрыва: жертва — сторона с наибольшими потерями (нейтральные не
+  // отвечают — у них нет арсенала). Планируем её ответ и вступление союзников.
+  private registerStrike(
+    hits: CasualtyHit[],
+    attacker: FactionId | undefined,
+    events: SimEvent[],
+  ): void {
+    if (this.doctrine === 'off' || hits.length === 0) return;
+
+    const deathsBy = new Map<FactionId, number>();
+    for (const h of hits) {
+      if (h.faction === 'neutral') continue; // нейтральным нечем и некому отвечать
+      deathsBy.set(h.faction, (deathsBy.get(h.faction) ?? 0) + h.deaths);
+    }
+    let victim: FactionId | undefined;
+    let worst = 0;
+    for (const [id, deaths] of deathsBy) {
+      if (deaths > worst) {
+        worst = deaths;
+        victim = id;
+      }
+    }
+    if (victim === undefined || worst <= ALIVE_EPS) return;
+
+    const blame = this.blameFor(victim, attacker);
+    if (blame === undefined) return; // сам себя бомбить в ответ никто не станет
+    this.escalate(victim, blame, events);
+
+    const delay = this.rng.range(RETALIATION_DELAY_MIN, RETALIATION_DELAY_MAX);
+    this.schedule(victim, blame, worst, false, delay);
+    // Союзники вступаются позже и меньшими силами (responseSize учитывает признак ally).
+    // За союзника не воюют ПРОТИВ своего же союзника: если жертву задел собственный блок
+    // (например, накрыло соседние города при ударе по чужой стране), отвечает только сама
+    // жертва — блок не рвётся на части из-за чужого промаха.
+    for (const ally of alliesOf(victim)) {
+      if (ally === blame || alliesOf(ally).includes(blame)) continue;
+      if (this.inTruce(ally, blame)) continue; // с перемирием ally в чужую войну не лезет
+      this.escalate(ally, blame, events);
+      const extra = this.rng.range(ALLY_DELAY_EXTRA_MIN, ALLY_DELAY_EXTRA_MAX);
+      this.schedule(ally, blame, worst, true, delay + extra);
+    }
+  }
+
+  // Тик отложенных ответов: у кого истёк срок реакции — поднимает волну по обидчику.
+  private runRetaliations(dt: number, events: SimEvent[]): void {
+    let changed = false;
+    for (const [id, plan] of [...this.pending]) {
+      plan.t -= dt;
+      if (plan.t > 0) continue;
+      this.pending.delete(id);
+      if (this.doctrine === 'off' || !this.canLaunch(id)) continue;
+      if (this.inTruce(id, plan.target)) continue; // перемирие отменяет уже занесённый кулак
+
+      const arsenal = this.arsenals.get(id) ?? 0;
+      const level = this.levelBetween(id, plan.target);
+      const size = responseSizeForLevel(level, plan.grievance, arsenal, plan.ally);
+      if (size <= 0) continue;
+      // Цели обидчика могли кончиться, пока шла реакция, — тогда общий выбор целей.
+      const targets =
+        this.citiesOf(plan.target).length > 0 ? this.citiesOf(plan.target) : this.pickTargets(id);
+      const launched = this.launchSalvo(id, targets, size, events);
+      if (launched === 0) continue;
+      events.push({
+        kind: 'retaliationLaunched',
+        from: id,
+        to: plan.target,
+        count: launched,
+        reason: plan.ally ? 'ally' : 'revenge',
+      });
+      changed = true;
+    }
+    if (changed) events.push(this.factionsEvent());
   }
 
   // Снимок изменяемого состояния сторон для HUD (статику он берёт из sim/factions.ts).
@@ -268,6 +641,8 @@ export class Simulation {
       popAlive: 0,
       citiesAlive: 0,
       arsenal: this.arsenals.get(f.id) ?? 0,
+      interceptors: this.interceptors.get(f.id) ?? 0,
+      enemies: this.enemiesOf(f.id),
     }));
     const byId = new Map(stats.map((s) => [s.id, s]));
     for (const c of this.cities) {
@@ -279,11 +654,30 @@ export class Simulation {
     return { kind: 'factionsChanged', factions: stats };
   }
 
+  // С кем сторона в конфликте: пары с ненулевым уровнем или действующим перемирием.
+  private enemiesOf(id: FactionId): { id: FactionId; level: number; truce: boolean }[] {
+    const out: { id: FactionId; level: number; truce: boolean }[] = [];
+    for (const [key, rel] of this.relations) {
+      if (rel.level <= 0 && rel.truce <= 0) continue;
+      const [a, b] = key.split('|') as [FactionId, FactionId];
+      if (a !== id && b !== id) continue;
+      out.push({ id: a === id ? b : a, level: rel.level, truce: rel.truce > 0 });
+    }
+    return out;
+  }
+
   private applyReset(events: SimEvent[]): void {
     // Убираем боеголовки в полёте и воскрешаем города.
     for (const entity of [...this.world.with('warhead')]) this.world.remove(entity);
     this.cities = createCities();
     this.resetArsenals();
+    this.pending.clear(); // запланированные ответы отменяются вместе с войной
+    this.relations = new Map();
+    this.offers = [];
+    this.warHappened = false;
+    this.quietFor = 0;
+    this.peaceCheckAcc = 0;
+    this.outcome = undefined;
     this.bombs = 0;
     this.megatons = 0;
     this.totalDeaths = 0;
@@ -292,11 +686,99 @@ export class Simulation {
     events.push(this.factionsEvent());
   }
 
+  // ---- ПРО ----
+
+  // Одна попытка перехвата на боеголовку, на ABM_INTERCEPT_AT её полёта. Перехватывает
+  // сторона, чей живой город ближе всего к цели (ПРО прикрывает свою территорию); свои
+  // ракеты никто не сбивает. Перехватчик тратится и при промахе — залпом оборону насыщают.
+  // Возвращает true, если боеголовка сбита (её больше нет).
+  private tryIntercept(entity: Entity, events: SimEvent[]): boolean {
+    const w = entity.warhead;
+    if (w === undefined || w.abmTried) return false;
+    if (w.t < w.flightTime * ABM_INTERCEPT_AT) return false;
+    w.abmTried = true;
+
+    const defender = defenderFor(
+      this.cities.filter((c) => c.alive > ALIVE_EPS),
+      w.dir,
+    );
+    if (defender === undefined || defender === 'neutral' || defender === w.faction) return false;
+    const left = this.interceptors.get(defender) ?? 0;
+    if (left <= 0) return false;
+    this.interceptors.set(defender, left - 1);
+
+    const k = Math.min(1, w.t / w.flightTime);
+    const pos = w.from ? ballisticPos(w.from, w.dir, k) : spaceStrikePos(w.dir, k);
+    const success = this.rng.next() < interceptChance(defender);
+    const id = this.ids.get(entity) ?? 0;
+    events.push({ kind: 'interception', id, by: defender, pos, success });
+
+    if (success) {
+      this.interceptedBy.set(defender, (this.interceptedBy.get(defender) ?? 0) + 1);
+      this.ids.delete(entity);
+      this.world.remove(entity);
+    }
+    events.push(this.factionsEvent()); // перехватчиков стало меньше
+    return success;
+  }
+
+  // ---- Итоги партии ----
+
+  // Снимок сторон для условий победы (нейтральные не воюют и в оценке не участвуют).
+  private sideSnapshots(): SideSnapshot[] {
+    return BELLIGERENTS.map((f) => {
+      const cities = this.cities.filter((c) => c.faction === f.id);
+      return {
+        id: f.id,
+        popAlive: cities.reduce((sum, c) => sum + Math.max(0, c.alive), 0),
+        popTotal: this.popTotals.get(f.id) ?? 0,
+        arsenal: this.arsenals.get(f.id) ?? 0,
+        citiesAlive: cities.filter((c) => c.alive > ALIVE_EPS).length,
+      };
+    });
+  }
+
+  // Проверяет условия победы; исход объявляется один раз за партию (до reset).
+  private checkOutcome(events: SimEvent[]): void {
+    if (this.outcome !== undefined) return;
+    const atPeace = [...this.relations.values()].every((r) => r.level <= 0 || r.truce > 0);
+    const result = evaluateOutcome(this.sideSnapshots(), {
+      warHappened: this.warHappened,
+      missilesInFlight: [...this.world.with('warhead')].length,
+      atPeace,
+      quietFor: this.quietFor,
+      peaceHoldT: PEACE_HOLD_T,
+    });
+    if (result === undefined) return;
+    this.outcome = result.outcome;
+    events.push({
+      kind: 'gameOver',
+      outcome: result.outcome,
+      winner: result.winner,
+      summary: this.summary(),
+    });
+  }
+
+  private summary(): SideSummary[] {
+    return this.sideSnapshots().map((s) => ({
+      id: s.id,
+      popAlive: s.popAlive,
+      popTotal: s.popTotal,
+      killed: this.killedBy.get(s.id) ?? 0,
+      launched: this.launchedBy.get(s.id) ?? 0,
+      intercepted: this.interceptedBy.get(s.id) ?? 0,
+      arsenal: s.arsenal,
+      interceptors: this.interceptors.get(s.id) ?? 0,
+    }));
+  }
+
   // Продвигает полёт боеголовок; по прилёте — взрыв, расчёт жертв, обновление статистики.
   private runMissiles(dt: number, events: SimEvent[]): void {
     for (const entity of [...this.world.with('warhead')]) {
       const w = entity.warhead;
       w.t += dt;
+      // ПРО отрабатывает на подлёте — до детонации (спека 2026-08-29-abm-escalation §2).
+      if (this.tryIntercept(entity, events)) continue;
       if (w.t < w.flightTime) continue;
 
       const id = this.ids.get(entity) ?? 0;
@@ -309,6 +791,11 @@ export class Simulation {
       assertValidYield(w.yield);
       const ts = TS_TABLE[w.yield];
       const { hits, totalDeaths } = computeCasualties(this.cities, w.dir, w.yield, ts);
+      this.registerStrike(hits, w.faction, events); // кто пострадал → кто и когда ответит
+      this.quietFor = 0; // взрыв обнуляет отсчёт тишины (условие «мир восстановлен»)
+      if (w.faction !== undefined) {
+        this.killedBy.set(w.faction, (this.killedBy.get(w.faction) ?? 0) + totalDeaths);
+      }
 
       const { surface, biome } = materialAtDir(w.dir);
       events.push({
@@ -353,6 +840,10 @@ export class Simulation {
       megatons: this.megatons,
       totalDeaths: this.totalDeaths,
       currentYield: this.currentYield,
+      doctrine: this.doctrine,
+      outcome: this.outcome,
+      relations: Object.fromEntries([...this.relations].map(([k, r]) => [k, { ...r }])),
+      interceptors: Object.fromEntries(this.interceptors),
       labelsEnabled: this.labelsEnabled,
     };
   }

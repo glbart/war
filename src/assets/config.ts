@@ -204,6 +204,9 @@ export const BALLISTIC_EASE_POW = 1.6; // e = k^POW — медленный бу�
 // След МБР (ревизия спеки §5): дуга пройденной траектории, тает после детонации.
 export const TRAIL_SEGMENTS = 96; // вершин дуги следа − 1
 export const TRAIL_FADE_T = 5; // сек затухания следа после детонации
+// Радиус, с которого падает «удар из космоса» (ручной клик): общий для MissileView и
+// расчёта точки перехвата в симуляции.
+export const SPACE_STRIKE_START_R = 2.6;
 export const TRAIL_COLOR = [1.0, 0.72, 0.42] as const; // цвет выхлопа (аддитивный)
 
 // ---------- Страны и фракции (спека 2026-08-29-factions-design.md) ----------
@@ -218,3 +221,42 @@ export const MARKER_POP_REF = 20; // млн — население «крупн�
 // Опустошённый город не исчезает совсем: тёмная мелкая точка на месте агломерации.
 export const MARKER_DEAD_SIZE_FRAC = 0.35;
 export const MARKER_DEAD_COLOR_FRAC = 0.2;
+
+// ---------- Дипломатия и ответный удар (спека 2026-08-29-retaliation-design.md) ----------
+// Задержка реакции стороны на удар (сек): волны обмена читаются глазом, а не сливаются.
+export const RETALIATION_DELAY_MIN = 3;
+export const RETALIATION_DELAY_MAX = 6;
+// Союзник вступается позже — добавка к задержке (сек).
+export const ALLY_DELAY_EXTRA_MIN = 2;
+export const ALLY_DELAY_EXTRA_MAX = 5;
+// Соразмерность: одна боеголовка ответа на столько млн погибших.
+export const RETALIATION_PER_DEATHS = 6;
+// Потолок волны при эскалации/doomsday. Он же бережёт пул ракет рендера (24 слота).
+export const RETALIATION_CAP_ESCALATE = 12;
+// Доля от расчётного залпа, которой вступается союзник.
+export const ALLY_RESPONSE_FRAC = 0.5;
+
+// ---------- ПРО, эскалация, победа (спека 2026-08-29-abm-escalation-victory-design.md) ----------
+// ПРО прикрывает свою территорию: перехват возможен, если цель ближе этого угла к живому
+// городу стороны (рад; ~0.28 ≈ 1800 км).
+export const ABM_COVER_ANGLE = 0.28;
+// Доля времени полёта, на которой отрабатывает перехватчик (уже на подлёте — видно вспышку).
+export const ABM_INTERCEPT_AT = 0.75;
+
+// Лестница эскалации: 0 мир · 1 кризис · 2 ограниченная · 3 полномасштабная · 4 тотальная.
+export const ESCALATION_MAX = 4;
+export const ESCALATION_DECAY_T = 45; // сек затишья на снижение уровня пары
+// Переговоры и перемирие.
+export const TRUCE_T = 60; // сек, пока стороны не отвечают друг другу
+export const PEACE_OFFER_TIMEOUT = 15; // сек на ответ игрока (молчание = отказ)
+export const PEACE_COOLDOWN_T = 25; // сек между предложениями по одной паре
+export const PEACE_HOLD_T = 30; // сек тишины при нулевых уровнях → исход «мир восстановлен»
+// Ниже этой доли исходного населения сторона считается павшей (HUD и условия победы).
+export const FALLEN_FRAC = 0.01;
+
+// Вспышка перехвата (render/InterceptView): короткий расширяющийся всполох на точке работы ПРО.
+export const INTERCEPT_SLOTS = 32;
+export const INTERCEPT_FLASH_T = 0.7; // сек жизни вспышки
+export const INTERCEPT_FLASH_SIZE = 0.05; // радиус в долях радиуса планеты
+export const INTERCEPT_HIT_COLOR = [0.75, 0.9, 1.0] as const; // сбита — бело-голубая вспышка
+export const INTERCEPT_MISS_COLOR = [1.0, 0.55, 0.25] as const; // промах — тусклый оранжевый
