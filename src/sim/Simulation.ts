@@ -13,6 +13,25 @@ import {
   AI_PULSE_T,
   GRIEVANCE_HALFLIFE,
   GRIEVANCE_SETTLED_PER_WARHEAD,
+  ESCALATION_MAX,
+  AI_GRIEVANCE_REF,
+  CAMPAIGN_T,
+  PROLIF_LOSS_COUNT,
+  INFLUENCE_START,
+  INFLUENCE_RATE,
+  COST_TREATY,
+  COST_SANCTIONS,
+  COST_INSPECT,
+  COST_SABOTAGE,
+  INFLUENCE_STRIKE_PENALTY,
+  SANCTION_T,
+  TREATY_T,
+  SABOTAGE_SUCCESS,
+  SABOTAGE_SETBACK_MIN,
+  SABOTAGE_SETBACK_MAX,
+  CASCADE_MOTIVATION,
+  NEW_POWER_ARSENAL,
+  NEW_POWER_INTERCEPTORS,
   ESCALATION_DECAY_T,
   TRUCE_T,
   PEACE_OFFER_TIMEOUT,
@@ -24,7 +43,7 @@ import { materialAtDir } from './material';
 import { angleBetween, jitterDir, type Vec3 } from './geo';
 import { flightTimeFor, ballisticPos, spaceStrikePos } from './ballistics';
 
-import { FACTIONS, BELLIGERENTS, isFactionId, type FactionId } from './factions';
+import { FACTIONS, BELLIGERENTS, ASPIRANTS, isFactionId, type FactionId } from './factions';
 import {
   alliesOf,
   doctrineCeiling,
@@ -38,6 +57,18 @@ import { actionSize } from './ai/actions';
 import type { Decision, DecisionContext, RivalView } from './ai/types';
 import { DEFENSES, interceptChance, defenderFor } from './defense';
 import { evaluateOutcome, type Outcome, type SideSnapshot } from './victory';
+import {
+  ASPIRANT_PROFILES,
+  createProgram,
+  advanceProgram,
+  motivationDrift,
+  treatyAcceptance,
+  totalProgress,
+  isRevealed,
+  setbackByStrike,
+  setbackByFraction,
+  type Program,
+} from './proliferation';
 
 // Время полёта боеголовки до детонации, сек (порт таймингов демо).
 const FLIGHT_TIME = 2.6;
@@ -143,6 +174,14 @@ export class Simulation {
   private warHappened = false;
   private quietFor = 0; // сек с последнего взрыва (для исхода «мир восстановлен»)
   private outcome: Outcome | undefined;
+  // Кампания «Нераспространение» (спека 2026-08-29-nonproliferation).
+  private programs = new Map<FactionId, Program>();
+  private influence = INFLUENCE_START;
+  private elapsed = 0; // сек с начала партии
+  private campaignAcc = 0; // аккумулятор для секундного снимка кампании
+  private revealedSeen = new Set<FactionId>();
+  private armedOrder: FactionId[] = [];
+  private toolUse = { treaties: 0, sanctions: 0, sabotages: 0, strikes: 0 };
 
   constructor(seed: number) {
     this.rng = new Rng(seed);
@@ -151,6 +190,19 @@ export class Simulation {
       this.popTotals.set(c.faction, (this.popTotals.get(c.faction) ?? 0) + c.pop);
     }
     this.resetArsenals();
+    this.resetCampaign();
+  }
+
+  private resetCampaign(): void {
+    this.programs = new Map(
+      ASPIRANTS.map((f) => [f.id, createProgram(f.id, ASPIRANT_PROFILES[f.id]!)]),
+    );
+    this.influence = INFLUENCE_START;
+    this.elapsed = 0;
+    this.campaignAcc = 0;
+    this.revealedSeen = new Set();
+    this.armedOrder = [];
+    this.toolUse = { treaties: 0, sanctions: 0, sabotages: 0, strikes: 0 };
   }
 
   private resetArsenals(): void {
@@ -177,6 +229,7 @@ export class Simulation {
     for (const cmd of commands) this.applyCommand(cmd, events);
     this.runMissiles(dt, events);
     this.tickRelations(dt);
+    this.runCampaign(dt, events);
     this.decayGrievances(dt);
     this.expireOffers(dt, events);
     this.runAi(dt, events);
@@ -236,6 +289,13 @@ export class Simulation {
         assertValidFaction(cmd.from);
         assertValidFaction(cmd.to);
         this.answerOffer(cmd.from, cmd.to, cmd.accept, events);
+        break;
+      case 'offerTreaty':
+      case 'imposeSanctions':
+      case 'inspect':
+      case 'sabotage':
+        assertValidFaction(cmd.target);
+        this.applyTool(cmd.kind, cmd.target, events);
         break;
       case 'setDoctrine':
         if (!isDoctrine(cmd.doctrine)) {
@@ -540,10 +600,161 @@ export class Simulation {
     }
     if (victim === undefined || worst <= ALIVE_EPS) return;
 
+    // Удар по стране с программой отбрасывает её работы на стадию назад — и злит.
+    const program = this.programs.get(victim);
+    if (program !== undefined && program.stage !== 'none' && program.stage !== 'armed') {
+      setbackByStrike(program);
+      program.motivation = Math.min(1, program.motivation + 0.25);
+      program.suspicion = 1;
+      this.toolUse.strikes += 1;
+      if (attacker !== undefined && attacker === this.playerSide) {
+        this.influence = Math.max(0, this.influence - INFLUENCE_STRIKE_PENALTY);
+      }
+    }
+
     const blame = this.blameFor(victim, attacker);
     if (blame === undefined) return; // сам себе счёт никто не выставляет
     this.escalate(victim, blame, events);
     this.addGrievance(victim, blame, worst);
+  }
+
+  // ---------- Кампания «Нераспространение» (спека 2026-08-29-nonproliferation) ----------
+
+  // Насколько стране страшно жить: накал вокруг неё и свежие потери от чужих ударов.
+  private threatFor(id: FactionId): number {
+    let heat = 0;
+    for (const f of BELLIGERENTS) {
+      if (f.id === id) continue;
+      heat = Math.max(heat, this.levelBetween(id, f.id) / ESCALATION_MAX);
+      const grievance = this.grievanceOf(id, f.id);
+      heat = Math.max(heat, Math.min(1, grievance / AI_GRIEVANCE_REF));
+    }
+    return heat;
+  }
+
+  // Тик программ: прогресс, мотивация, испытания, доход влияния и секундный снимок для HUD.
+  private runCampaign(dt: number, events: SimEvent[]): void {
+    this.elapsed += dt;
+    this.influence = Math.min(999, this.influence + INFLUENCE_RATE * dt);
+
+    for (const program of this.programs.values()) {
+      const base = ASPIRANT_PROFILES[program.id]!.motivation;
+      program.motivation = motivationDrift(program, base, this.threatFor(program.id), dt);
+      const tested = advanceProgram(program, dt);
+
+      if (!this.revealedSeen.has(program.id) && isRevealed(program) && program.stage !== 'armed') {
+        this.revealedSeen.add(program.id);
+        events.push({ kind: 'programRevealed', faction: program.id, stage: program.stage });
+      }
+      if (tested) this.armCountry(program, events);
+    }
+
+    this.campaignAcc += dt;
+    if (this.campaignAcc >= 1) {
+      this.campaignAcc = 0;
+      events.push({
+        kind: 'campaignChanged',
+        influence: this.influence,
+        elapsed: this.elapsed,
+        programs: [...this.programs.values()].map((p) => this.programView(p)),
+      });
+    }
+  }
+
+  // Испытание: страна становится ядерной державой — получает арсенал, ПРО и место в войне.
+  // Чужая бомба подстёгивает всех остальных: это и есть каскад распространения.
+  private armCountry(program: Program, events: SimEvent[]): void {
+    this.armedOrder.push(program.id);
+    this.arsenals.set(program.id, NEW_POWER_ARSENAL);
+    this.interceptors.set(program.id, NEW_POWER_INTERCEPTORS);
+    events.push({ kind: 'nuclearTest', faction: program.id });
+    for (const other of this.programs.values()) {
+      if (other.id === program.id || other.stage === 'armed') continue;
+      other.motivation = Math.min(1, other.motivation + CASCADE_MOTIVATION);
+    }
+    events.push(this.factionsEvent());
+  }
+
+  // То, что игрок ЗНАЕТ о программе: до порога подозрения стадия и прогресс скрыты.
+  private programView(p: Program) {
+    const revealed = isRevealed(p);
+    return {
+      id: p.id,
+      revealed,
+      stage: revealed ? p.stage : ('none' as const),
+      progress: revealed ? totalProgress(p) : 0,
+      motivation: p.motivation,
+      suspicion: p.suspicion,
+      sanctions: p.sanctions > 0,
+      treaty: p.treaty > 0,
+    };
+  }
+
+  // Инструменты игрока. Каждый стоит влияния; не хватает — команда молча не проходит
+  // (HUD гасит кнопку, но сеть/скрипт могут прислать что угодно).
+  private applyTool(
+    kind: 'offerTreaty' | 'imposeSanctions' | 'inspect' | 'sabotage',
+    target: FactionId,
+    events: SimEvent[],
+  ): void {
+    const program = this.programs.get(target);
+    if (program === undefined) return; // цель не претендент
+    const cost =
+      kind === 'offerTreaty'
+        ? COST_TREATY
+        : kind === 'imposeSanctions'
+          ? COST_SANCTIONS
+          : kind === 'inspect'
+            ? COST_INSPECT
+            : COST_SABOTAGE;
+    if (this.influence < cost) return;
+    this.influence -= cost;
+
+    switch (kind) {
+      case 'offerTreaty': {
+        this.toolUse.treaties += 1;
+        const accepted = this.rng.next() < treatyAcceptance(program);
+        if (accepted) {
+          program.treaty = TREATY_T;
+          program.motivation = Math.max(0, program.motivation - 0.2);
+        } else {
+          program.motivation = Math.min(1, program.motivation + 0.05); // давление обижает
+        }
+        events.push({ kind: 'treatyAnswer', faction: target, accepted });
+        break;
+      }
+      case 'imposeSanctions':
+        this.toolUse.sanctions += 1;
+        program.sanctions = SANCTION_T;
+        program.motivation = Math.min(1, program.motivation + 0.08);
+        events.push({ kind: 'sanctionsImposed', faction: target });
+        break;
+      case 'inspect':
+        program.suspicion = 1;
+        this.revealedSeen.add(target);
+        setbackByFraction(program, 0.05);
+        events.push({ kind: 'inspected', faction: target, stage: program.stage });
+        break;
+      case 'sabotage': {
+        this.toolUse.sabotages += 1;
+        const success = this.rng.next() < SABOTAGE_SUCCESS;
+        if (success) {
+          setbackByFraction(program, this.rng.range(SABOTAGE_SETBACK_MIN, SABOTAGE_SETBACK_MAX));
+        } else {
+          // Провал раскрывает исполнителя: мотивация скачком и ссора с игроком.
+          program.motivation = Math.min(1, program.motivation + 0.15);
+          if (this.playerSide !== undefined) this.escalate(target, this.playerSide, events);
+        }
+        events.push({ kind: 'sabotageResult', faction: target, success });
+        break;
+      }
+    }
+    events.push({
+      kind: 'campaignChanged',
+      influence: this.influence,
+      elapsed: this.elapsed,
+      programs: [...this.programs.values()].map((p) => this.programView(p)),
+    });
   }
 
   // ---------- Слой решений (Utility AI, спека 2026-08-29-utility-ai-design.md) ----------
@@ -610,6 +821,8 @@ export class Simulation {
     const n = BELLIGERENTS.length;
     for (let i = 0; i < n; i++) {
       const id = BELLIGERENTS[i]!.id;
+      // За сторону игрока решает игрок: её удары, договоры и ответы идут только командами.
+      if (id === this.playerSide) continue;
       const phase = (i / n) * AI_PULSE_T;
       const slot = Math.floor((this.aiClock - phase) / AI_PULSE_T);
       if (slot < 0 || slot === this.lastPulse.get(id)) continue;
@@ -715,6 +928,7 @@ export class Simulation {
     for (const entity of [...this.world.with('warhead')]) this.world.remove(entity);
     this.cities = createCities();
     this.resetArsenals();
+    this.resetCampaign();
     this.grievances.clear(); // память обид обнуляется вместе с войной
     this.lastChoice.clear();
     this.lastPulse.clear();
@@ -790,6 +1004,10 @@ export class Simulation {
     if (this.outcome !== undefined) return;
     const atPeace = [...this.relations.values()].every((r) => r.level <= 0 || r.truce > 0);
     const result = evaluateOutcome(this.sideSnapshots(), {
+      armedCount: this.armedOrder.length,
+      elapsed: this.elapsed,
+      campaignT: CAMPAIGN_T,
+      lossCount: PROLIF_LOSS_COUNT,
       warHappened: this.warHappened,
       missilesInFlight: [...this.world.with('warhead')].length,
       atPeace,
@@ -803,6 +1021,16 @@ export class Simulation {
       outcome: result.outcome,
       winner: result.winner,
       summary: this.summary(),
+      campaign: {
+        elapsed: this.elapsed,
+        armed: [...this.armedOrder],
+        stopped: ASPIRANTS.length - this.armedOrder.length,
+        treaties: this.toolUse.treaties,
+        sanctions: this.toolUse.sanctions,
+        sabotages: this.toolUse.sabotages,
+        strikes: this.toolUse.strikes,
+        influence: Math.round(this.influence),
+      },
     });
   }
 
@@ -891,6 +1119,11 @@ export class Simulation {
       outcome: this.outcome,
       relations: Object.fromEntries([...this.relations].map(([k, r]) => [k, { ...r }])),
       interceptors: Object.fromEntries(this.interceptors),
+      influence: Math.round(this.influence),
+      elapsed: Math.round(this.elapsed),
+      programs: Object.fromEntries(
+        [...this.programs].map(([k, p]) => [k, { stage: p.stage, progress: totalProgress(p) }]),
+      ),
       labelsEnabled: this.labelsEnabled,
     };
   }

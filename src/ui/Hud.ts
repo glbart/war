@@ -6,8 +6,22 @@
 // кадрового батча drainEvents(), которым уже пользуется Scene).
 import './styles.css';
 import type { SimHost } from '../sim/SimHost';
-import type { SimEvent, FactionStat, SideSummary } from '../sim/events';
-import { FACTIONS, BELLIGERENTS, factionById, type FactionId } from '../sim/factions';
+import type {
+  SimEvent,
+  FactionStat,
+  SideSummary,
+  ProgramView,
+  CampaignSummary,
+} from '../sim/events';
+import { FACTIONS, BELLIGERENTS, ASPIRANTS, factionById, type FactionId } from '../sim/factions';
+import { STAGE_NAMES } from '../sim/proliferation';
+import {
+  COST_TREATY,
+  COST_SANCTIONS,
+  COST_INSPECT,
+  COST_SABOTAGE,
+  CAMPAIGN_T,
+} from '../assets/config';
 import {
   DOCTRINES,
   DOCTRINE_NAMES,
@@ -108,6 +122,16 @@ export class Hud {
   >();
   private whyFor: FactionId | undefined;
   private readonly whyEl: HTMLElement;
+  // Режим «Нераспространение»: строки программ, выбранная цель и кнопки инструментов.
+  private readonly programRows = new Map<
+    FactionId,
+    { row: HTMLElement; stage: HTMLElement; bar: HTMLElement; marks: HTMLElement }
+  >();
+  private programTarget: FactionId | undefined;
+  private influence = 0;
+  private readonly influenceEl: HTMLElement;
+  private readonly clockEl: HTMLElement;
+  private readonly toolButtons: { el: HTMLButtonElement; cost: number }[] = [];
 
   // Метка времени (performance.now()) последнего explosionStarted — база задержки atWaveTime
   // для последующих cityHit (тот же кадровый батч событий), чтобы города «гасли» в ленте
@@ -123,7 +147,7 @@ export class Hud {
     root.innerHTML = `
       <h1>☢ ЯДЕРНАЯ ПЕСОЧНИЦА</h1>
       <div id="shatter" style="display: none">☠ ПЛАНЕТА РАСКОЛОТА</div>
-      <div id="stats">Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
+      <div id="stats">Влияние: <b id="influence">0</b> · До конца партии: <b id="clock">10:00</b><br>Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
       <div id="peace-offer" style="display: none">
         <span id="peace-text"></span>
         <span class="row">
@@ -134,6 +158,14 @@ export class Hud {
       <div id="feed"></div>
       <div id="factions"></div>
       <div id="why" style="display: none"></div>
+      <div id="programs-title">Ядерные программы</div>
+      <div id="programs"></div>
+      <div class="row" id="tools">
+        <button id="t-treaty" title="Договор: страна может заморозить программу">☮ ${COST_TREATY}</button>
+        <button id="t-sanctions" title="Санкции: программа идёт втрое медленнее">⛔ ${COST_SANCTIONS}</button>
+        <button id="t-inspect" title="Инспекция: раскрывает стадию и прогресс">🔍 ${COST_INSPECT}</button>
+        <button id="t-sabotage" title="Саботаж: откат программы, но можно провалиться">💥 ${COST_SABOTAGE}</button>
+      </div>
       <div class="row">
         <button data-yield="1">1 Мт</button>
         <button data-yield="10">10 Мт</button>
@@ -179,6 +211,10 @@ export class Hud {
     this.overEl = overlay;
     this.overBodyEl = body;
     this.whyEl = root.querySelector<HTMLElement>('#why')!;
+    this.influenceEl = root.querySelector<HTMLElement>('#influence')!;
+    this.clockEl = root.querySelector<HTMLElement>('#clock')!;
+    this.buildProgramRows(root.querySelector<HTMLElement>('#programs')!);
+    this.bindTools(root);
     this.buildFactionRows(root.querySelector<HTMLElement>('#factions')!);
     this.buildSideSelects();
     this.buildDoctrineSelect();
@@ -248,6 +284,8 @@ export class Hud {
       row.append(dot, name, war, pop, ars);
       // Клик по строке — «почему»: показать, из чего сложилось решение этой стороны.
       row.addEventListener('click', () => this.toggleWhy(f.id));
+      // Претендент попадает в список сторон, только когда получит бомбу или ввяжется в войну.
+      if (f.aspirant) row.hidden = true;
       container.append(row);
       this.factionRows.set(f.id, { pop, ars, war, row });
     }
@@ -270,6 +308,90 @@ export class Hud {
     };
     fill(this.attackerSel, BELLIGERENTS);
     fill(this.targetSel, FACTIONS);
+  }
+
+  // Панель программ: строка на претендента. Клик выбирает цель для инструментов.
+  private buildProgramRows(container: HTMLElement): void {
+    for (const f of ASPIRANTS) {
+      const row = document.createElement('div');
+      row.className = 'p-row';
+      const dot = document.createElement('i');
+      dot.style.background = cssColor(f.id);
+      const name = document.createElement('span');
+      name.className = 'p-name';
+      name.textContent = f.name;
+      const stage = document.createElement('span');
+      stage.className = 'p-stage';
+      stage.textContent = 'не подтверждена';
+      const marks = document.createElement('span');
+      marks.className = 'p-marks';
+      const bar = document.createElement('span');
+      bar.className = 'p-bar';
+      const fill = document.createElement('i');
+      bar.append(fill);
+      row.append(dot, name, marks, stage, bar);
+      row.addEventListener('click', () => this.selectProgram(f.id));
+      container.append(row);
+      this.programRows.set(f.id, { row, stage, bar: fill, marks });
+    }
+  }
+
+  private bindTools(root: HTMLElement): void {
+    const bind = (
+      id: string,
+      cost: number,
+      kind: 'offerTreaty' | 'imposeSanctions' | 'inspect' | 'sabotage',
+    ) => {
+      const el = root.querySelector<HTMLButtonElement>(id)!;
+      el.addEventListener('click', () => {
+        if (this.programTarget === undefined) return;
+        this.host.post({ kind, target: this.programTarget });
+      });
+      this.toolButtons.push({ el, cost });
+    };
+    bind('#t-treaty', COST_TREATY, 'offerTreaty');
+    bind('#t-sanctions', COST_SANCTIONS, 'imposeSanctions');
+    bind('#t-inspect', COST_INSPECT, 'inspect');
+    bind('#t-sabotage', COST_SABOTAGE, 'sabotage');
+    this.updateTools();
+  }
+
+  private selectProgram(id: FactionId): void {
+    this.programTarget = this.programTarget === id ? undefined : id;
+    for (const [rowId, row] of this.programRows) {
+      row.row.classList.toggle('selected', rowId === this.programTarget);
+    }
+    this.updateTools();
+  }
+
+  // Инструмент доступен, когда выбрана цель и хватает влияния.
+  private updateTools(): void {
+    for (const { el, cost } of this.toolButtons) {
+      el.disabled = this.programTarget === undefined || this.influence < cost;
+    }
+  }
+
+  // Секундный снимок кампании: влияние, часы партии и состояние всех программ.
+  private updateCampaign(influence: number, elapsed: number, programs: ProgramView[]): void {
+    this.influence = influence;
+    const rounded = String(Math.floor(influence));
+    if (this.influenceEl.textContent !== rounded) this.influenceEl.textContent = rounded;
+    const left = Math.max(0, CAMPAIGN_T - elapsed);
+    const clock = `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`;
+    if (this.clockEl.textContent !== clock) this.clockEl.textContent = clock;
+
+    for (const p of programs) {
+      const row = this.programRows.get(p.id);
+      if (row === undefined) continue;
+      const stage = p.revealed ? STAGE_NAMES[p.stage] : 'не подтверждена';
+      if (row.stage.textContent !== stage) row.stage.textContent = stage;
+      row.stage.classList.toggle('unknown', !p.revealed);
+      (row.bar.style as CSSStyleDeclaration).width = `${Math.round(p.progress * 100)}%`;
+      row.bar.classList.toggle('armed', p.stage === 'armed');
+      const marks = (p.treaty ? '☮' : '') + (p.sanctions ? '⛔' : '');
+      if (row.marks.textContent !== marks) row.marks.textContent = marks;
+    }
+    this.updateTools();
   }
 
   // Раскрывает/прячет разложение последнего решения стороны.
@@ -363,6 +485,7 @@ export class Hud {
         row.war.title = title;
       }
       row.row.classList.toggle('fallen', fallen);
+      if (factionById(s.id).aspirant) row.row.hidden = s.arsenal === 0 && s.enemies.length === 0;
     }
     this.updateSalvoButton();
   }
@@ -461,8 +584,41 @@ export class Hud {
         });
         if (this.whyFor === e.faction) this.renderWhy();
         break;
+      case 'campaignChanged':
+        this.updateCampaign(e.influence, e.elapsed, e.programs);
+        break;
+      case 'programRevealed':
+        this.pushLine(
+          `🔍 ${factionById(e.faction).name}: программа подтверждена (${STAGE_NAMES[e.stage]})`,
+          'prog',
+        );
+        break;
+      case 'nuclearTest':
+        this.pushLine(`☢ ${factionById(e.faction).name} провела испытание — новая держава!`, 'war');
+        break;
+      case 'treatyAnswer':
+        this.pushLine(
+          `☮ ${factionById(e.faction).name} ${e.accepted ? 'подписала договор' : 'отвергла договор'}`,
+          e.accepted ? 'peace' : 'prog',
+        );
+        break;
+      case 'sanctionsImposed':
+        this.pushLine(`⛔ Санкции против: ${factionById(e.faction).name}`, 'prog');
+        break;
+      case 'inspected':
+        this.pushLine(
+          `🔍 Инспекция ${factionById(e.faction).name}: ${STAGE_NAMES[e.stage]}`,
+          'prog',
+        );
+        break;
+      case 'sabotageResult':
+        this.pushLine(
+          `💥 Саботаж ${factionById(e.faction).name}: ${e.success ? 'программа отброшена' : 'провал, нас раскрыли'}`,
+          e.success ? 'prog' : 'war',
+        );
+        break;
       case 'gameOver':
-        this.showGameOver(e.outcome, e.winner, e.summary);
+        this.showGameOver(e.outcome, e.winner, e.summary, e.campaign);
         break;
       case 'statsChanged':
         this.bombsEl.textContent = String(e.bombs);
@@ -564,6 +720,7 @@ export class Hud {
     outcome: Outcome,
     winner: FactionId | undefined,
     summary: SideSummary[],
+    campaign: CampaignSummary,
   ): void {
     const title = this.overEl.querySelector<HTMLElement>('#gameover-title')!;
     title.textContent = winner
@@ -583,7 +740,15 @@ export class Hud {
         </tr>`;
       })
       .join('');
+    const armedNames = campaign.armed.map((id) => factionById(id).name).join(', ') || 'никто';
     this.overBodyEl.innerHTML = `
+      <div class="go-campaign">
+        Партия: ${Math.floor(campaign.elapsed / 60)} мин ${Math.floor(campaign.elapsed % 60)} с ·
+        бомбу получили: <b>${armedNames}</b> · программ остановлено: <b>${campaign.stopped}</b><br>
+        договоров ${campaign.treaties} · санкций ${campaign.sanctions} ·
+        саботажей ${campaign.sabotages} · ударов по программам ${campaign.strikes} ·
+        влияния осталось ${campaign.influence}
+      </div>
       <table>
         <tr><th>Сторона</th><th>Выжило</th><th>Потери</th><th>Убито</th><th>Пусков</th><th>Сбито</th><th>☢</th></tr>
         ${rows}

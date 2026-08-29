@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   FACTIONS,
   BELLIGERENTS,
+  NUCLEAR_POWERS,
+  ASPIRANTS,
   FACTION_CITIES,
   factionOfCity,
   factionById,
@@ -32,17 +34,24 @@ describe('Стороны конфликта', () => {
     expect(dup).toEqual([]);
   });
 
-  it('у каждой воюющей стороны есть арсенал и хотя бы один город', () => {
+  it('у ядерных держав есть арсенал, у претендентов — нет, но города есть у всех', () => {
     for (const f of BELLIGERENTS) {
-      expect(f.arsenal).toBeGreaterThan(0);
       const cities = createCities().filter((c) => c.faction === f.id);
       expect(cities.length, f.name).toBeGreaterThan(0);
+      if (f.aspirant) expect(f.arsenal, f.name).toBe(0);
+      else expect(f.arsenal, f.name).toBeGreaterThan(0);
     }
+  });
+
+  it('претенденты и ядерные державы вместе дают всех воюющих', () => {
+    expect(NUCLEAR_POWERS.length + ASPIRANTS.length).toBe(BELLIGERENTS.length);
+    expect(ASPIRANTS.every((f) => f.aspirant === true)).toBe(true);
+    expect(NUCLEAR_POWERS.every((f) => f.aspirant !== true)).toBe(true);
   });
 
   it('нейтральные — псевдо-сторона без арсенала, туда попадают города вне списков', () => {
     expect(factionById('neutral').arsenal).toBe(0);
-    expect(factionOfCity('Tokyo')).toBe('neutral'); // неядерная страна — нейтральный город
+    expect(factionOfCity('Jakarta')).toBe('neutral'); // страна вне списков — нейтральный город
     expect(factionOfCity('Такого города нет')).toBe('neutral');
     expect(BELLIGERENTS.some((f) => f.id === 'neutral')).toBe(false);
   });
@@ -78,7 +87,10 @@ describe('Стороны конфликта', () => {
     expect(of('Karachi')).toBe('pakistan');
     expect(of('Pyongyang')).toBe('dprk');
     expect(of('Jerusalem')).toBe('israel');
-    expect(of('São Paulo')).toBe('neutral');
+    expect(of('São Paulo')).toBe('brazil');
+    expect(of('Tokyo')).toBe('japan');
+    expect(of('Tehran')).toBe('iran');
+    expect(of('Jakarta')).toBe('neutral');
   });
 
   it('сумма населения по сторонам равна суммарному населению всех городов', () => {

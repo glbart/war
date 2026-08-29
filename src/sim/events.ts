@@ -4,6 +4,31 @@ import type { FactionId } from './factions';
 import type { Doctrine } from './diplomacy';
 import type { Outcome } from './victory';
 import type { ActionId, Candidate } from './ai/types';
+import type { ProgramStage } from './proliferation';
+
+// Что игрок знает о чужой программе: пока подозрение ниже порога, стадия и прогресс скрыты.
+export type ProgramView = {
+  id: FactionId;
+  revealed: boolean;
+  stage: ProgramStage;
+  progress: number; // весь путь к бомбе 0..1
+  motivation: number;
+  suspicion: number;
+  sanctions: boolean;
+  treaty: boolean;
+};
+
+// Сводка кампании для экрана итогов.
+export type CampaignSummary = {
+  elapsed: number;
+  armed: FactionId[]; // кто успел получить бомбу
+  stopped: number; // программ не доведено до бомбы
+  treaties: number;
+  sanctions: number;
+  sabotages: number;
+  strikes: number; // ударов по программам
+  influence: number;
+};
 
 // Изменяемое состояние стороны для HUD (статику — название/цвет/исходное население — HUD
 // берёт из sim/factions.ts напрямую, чтобы не гонять её в каждом событии).
@@ -89,5 +114,19 @@ export type SimEvent =
   | { kind: 'ceasefireAccepted'; from: FactionId; to: FactionId }
   | { kind: 'ceasefireRejected'; from: FactionId; to: FactionId }
   | { kind: 'truceBroken'; by: FactionId; against: FactionId }
-  | { kind: 'gameOver'; outcome: Outcome; winner?: FactionId; summary: SideSummary[] }
+  | {
+      kind: 'gameOver';
+      outcome: Outcome;
+      winner?: FactionId;
+      summary: SideSummary[];
+      campaign: CampaignSummary;
+    }
+  // Раз в секунду: состояние кампании и всех программ (то, что известно игроку).
+  | { kind: 'campaignChanged'; influence: number; elapsed: number; programs: ProgramView[] }
+  | { kind: 'programRevealed'; faction: FactionId; stage: ProgramStage }
+  | { kind: 'nuclearTest'; faction: FactionId } // страна провела испытание и стала державой
+  | { kind: 'treatyAnswer'; faction: FactionId; accepted: boolean }
+  | { kind: 'sanctionsImposed'; faction: FactionId }
+  | { kind: 'inspected'; faction: FactionId; stage: ProgramStage }
+  | { kind: 'sabotageResult'; faction: FactionId; success: boolean }
   | { kind: 'labelsToggled'; enabled: boolean };
