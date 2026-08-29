@@ -205,3 +205,16 @@ export const BALLISTIC_EASE_POW = 1.6; // e = k^POW — медленный бу�
 export const TRAIL_SEGMENTS = 96; // вершин дуги следа − 1
 export const TRAIL_FADE_T = 5; // сек затухания следа после детонации
 export const TRAIL_COLOR = [1.0, 0.72, 0.42] as const; // цвет выхлопа (аддитивный)
+
+// ---------- Страны и фракции (спека 2026-08-29-factions-design.md) ----------
+// Разброс пусковых площадок вокруг города-«хозяина» (рад, ≈3°): ракеты стартуют с территории
+// страны, а не из центра мегаполиса.
+export const FACTION_LAUNCH_JITTER = 0.05;
+// Маркеры городов (CityMarkersView): радиус посадки над поверхностью и шкала размера.
+export const MARKER_R = 1.004;
+export const MARKER_SIZE_MIN = 0.004;
+export const MARKER_SIZE_MAX = 0.011;
+export const MARKER_POP_REF = 20; // млн — население «крупного» города (верх шкалы размера)
+// Опустошённый город не исчезает совсем: тёмная мелкая точка на месте агломерации.
+export const MARKER_DEAD_SIZE_FRAC = 0.35;
+export const MARKER_DEAD_COLOR_FRAC = 0.2;

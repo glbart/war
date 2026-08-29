@@ -1,7 +1,9 @@
 import { lonLatToDir, type Vec3 } from './geo';
+import { factionOfCity, type FactionId } from './factions';
 
-// Модель города в симуляции.
-export type City = { name: string; pop: number; alive: number; dir: Vec3 };
+// Модель города в симуляции. faction — сторона-владелец (спека 2026-08-29): города вне
+// списков сторон принадлежат 'neutral', отдельного «ничьего» состояния нет.
+export type City = { name: string; pop: number; alive: number; dir: Vec3; faction: FactionId };
 
 // Данные городов перенесены дословно из эталона (reference/earth-nuke.html, ~332-420):
 // [название, широта(градусы), долгота(градусы), население агломерации в млн].
@@ -265,12 +267,19 @@ const CITY_DATA: [string, number, number, number][] = [
   ['Reykjavík', 64.15, -21.94, 0.2],
 ];
 
-// Строит список городов симуляции из CITY_DATA; alive изначально равен pop.
+// Строит список городов симуляции из CITY_DATA; alive изначально равен pop, сторона —
+// из FACTION_CITIES (см. sim/factions.ts).
 export function createCities(): City[] {
   return CITY_DATA.map(([name, lat, lon, pop]) => ({
     name,
     pop,
     alive: pop,
     dir: lonLatToDir((lon * Math.PI) / 180, (lat * Math.PI) / 180),
+    faction: factionOfCity(name),
   }));
+}
+
+// Имена городов как есть (для сверки списков сторон с данными — используется в тестах).
+export function cityNames(): string[] {
+  return CITY_DATA.map(([name]) => name);
 }
