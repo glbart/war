@@ -9,11 +9,10 @@ import {
   YIELDS,
   SALVO_COUNT,
   FACTION_LAUNCH_JITTER,
-  RETALIATION_DELAY_MIN,
-  RETALIATION_DELAY_MAX,
-  ALLY_DELAY_EXTRA_MIN,
-  ALLY_DELAY_EXTRA_MAX,
   ABM_INTERCEPT_AT,
+  AI_PULSE_T,
+  GRIEVANCE_HALFLIFE,
+  GRIEVANCE_SETTLED_PER_WARHEAD,
   ESCALATION_DECAY_T,
   TRUCE_T,
   PEACE_OFFER_TIMEOUT,
@@ -28,14 +27,15 @@ import { flightTimeFor, ballisticPos, spaceStrikePos } from './ballistics';
 import { FACTIONS, BELLIGERENTS, isFactionId, type FactionId } from './factions';
 import {
   alliesOf,
-  responseSizeForLevel,
-  peaceWillingness,
   doctrineCeiling,
   isDoctrine,
   DEFAULT_DOCTRINE,
   TEMPERAMENTS,
   type Doctrine,
 } from './diplomacy';
+import { decide, type LastChoice } from './ai/decide';
+import { actionSize } from './ai/actions';
+import type { Decision, DecisionContext, RivalView } from './ai/types';
 import { DEFENSES, interceptChance, defenderFor } from './defense';
 import { evaluateOutcome, type Outcome, type SideSnapshot } from './victory';
 
@@ -45,10 +45,8 @@ const FLIGHT_TIME = 2.6;
 // Порог «город ещё жив» — тот же, по которому CasualtySystem пропускает опустошённые города.
 const ALIVE_EPS = 0.001;
 
-// Запланированный ответный удар стороны (спека 2026-08-29-retaliation): пока идёт реакция,
-// новые попадания добавляют погибших в ту же запись, а не плодят отдельные волны.
-// Отношения пары сторон: уровень лестницы эскалации, тишина (для спада уровня), остаток
-// перемирия и пауза между предложениями мира (спека 2026-08-29-abm-escalation-victory §3).
+// Отношения пары сторон: ступень лестницы эскалации, тишина (для спада), остаток перемирия
+// и пауза между предложениями мира (спека 2026-08-29-abm-escalation-victory §3).
 interface Relation {
   level: number;
   quiet: number;
@@ -56,28 +54,17 @@ interface Relation {
   cooldown: number;
 }
 
-// Предложение перемирия, адресованное стороне ИГРОКА и ждущее его ответа (молчание = отказ).
+// Предложение перемирия «на столе»: ждёт решения адресата (игрок — кнопкой, ИИ — на пульсе).
 interface PeaceOffer {
   from: FactionId;
   to: FactionId;
   t: number;
 }
 
-interface Retaliation {
-  t: number; // сек до пуска
-  grievance: number; // накопленные потери (млн) — из них считается размер ответа
-  target: FactionId; // кому мстим
-  ally: boolean; // вступаемся за союзника (ответ вполовину меньше)
-}
-
 // Сколько раз пробуем найти сушу под пусковую площадку рядом с городом, прежде чем уйти
 // в общий фолбэк (случайная точка суши): города прибрежные, грубая landmask вокруг них
 // местами вода — упереться в лимит нормально, зависнуть нельзя.
 const LAUNCH_SITE_TRIES = 8;
-
-// Как часто симуляция разбирает горячие пары на предмет переговоров (сек). Реже, чем тик:
-// переговоры — редкое событие, а не ежекадровая работа.
-const PEACE_CHECK_T = 5;
 
 // Мощности заряда, поддерживаемые демо (мегатонны).
 type YieldMt = Yield;
@@ -135,7 +122,14 @@ export class Simulation {
   private bootstrapped = false; // выдан ли стартовый factionsChanged (первый тик)
   // Дипломатия (спека 2026-08-29-retaliation): режим ответа, отложенные ответы, состояние войн.
   private doctrine: Doctrine = DEFAULT_DOCTRINE;
-  private readonly pending = new Map<FactionId, Retaliation>();
+  // Память обид: сколько населения сторона потеряла от каждой другой (млн). Тает со временем
+  // (GRIEVANCE_HALFLIFE) — страна отходит. Это главный вход соображений «за что бить».
+  private grievances = new Map<string, number>();
+  // Слой решений: фазы пульса и прошлый выбор каждой стороны (для инерции).
+  private aiClock = 0;
+  private lastChoice = new Map<FactionId, LastChoice>();
+  private lastPulse = new Map<FactionId, number>();
+  private lastStrikeAt = new Map<FactionId, number>(); // когда сторона в последний раз стреляла
   private relations = new Map<string, Relation>();
   private offers: PeaceOffer[] = [];
   private playerSide: FactionId | undefined; // за кого играет пользователь (setSide)
@@ -148,7 +142,6 @@ export class Simulation {
   private readonly popTotals = new Map<FactionId, number>();
   private warHappened = false;
   private quietFor = 0; // сек с последнего взрыва (для исхода «мир восстановлен»)
-  private peaceCheckAcc = 0;
   private outcome: Outcome | undefined;
 
   constructor(seed: number) {
@@ -183,9 +176,10 @@ export class Simulation {
 
     for (const cmd of commands) this.applyCommand(cmd, events);
     this.runMissiles(dt, events);
-    this.runRetaliations(dt, events);
     this.tickRelations(dt);
-    this.runDiplomacy(dt, events);
+    this.decayGrievances(dt);
+    this.expireOffers(dt, events);
+    this.runAi(dt, events);
     this.quietFor += dt;
     this.checkOutcome(events);
 
@@ -249,7 +243,7 @@ export class Simulation {
         }
         this.doctrine = cmd.doctrine;
         // Выключенная доктрина снимает уже запланированные ответы: «выкл» значит выкл.
-        if (this.doctrine === 'off') this.pending.clear();
+        if (this.doctrine === 'off') this.offers = [];
         events.push({ kind: 'doctrineChanged', doctrine: this.doctrine });
         break;
       case 'reset':
@@ -419,11 +413,18 @@ export class Simulation {
   }
 
   // Удар поднимает пару на ступень (не выше потолка доктрины) и ломает перемирие, если было.
-  private escalate(victim: FactionId, blame: FactionId, events: SimEvent[]): number {
+  // by — кто именно сорвал перемирие (по умолчанию виновник удара); нужен, потому что
+  // эскалацию поднимают обе стороны: и жертва по факту прилёта, и агрессор по факту пуска.
+  private escalate(
+    victim: FactionId,
+    blame: FactionId,
+    events: SimEvent[],
+    by: FactionId = blame,
+  ): number {
     const rel = this.relation(victim, blame);
     if (rel.truce > 0) {
       rel.truce = 0;
-      events.push({ kind: 'truceBroken', by: blame, against: victim });
+      events.push({ kind: 'truceBroken', by, against: by === victim ? blame : victim });
     }
     rel.level = Math.min(doctrineCeiling(this.doctrine), rel.level + 1);
     rel.quiet = 0;
@@ -446,68 +447,47 @@ export class Simulation {
 
   // ---- Переговоры ----
 
-  private damageFrac(id: FactionId): number {
-    const total = this.popTotals.get(id) ?? 0;
-    if (total <= 0) return 0;
-    const alive = this.cities
-      .filter((c) => c.faction === id)
-      .reduce((sum, c) => sum + Math.max(0, c.alive), 0);
-    return 1 - alive / total;
-  }
-
-  private willingness(id: FactionId, level: number): number {
-    const start = FACTIONS.find((f) => f.id === id)?.arsenal ?? 1;
-    return peaceWillingness({
-      temperament: TEMPERAMENTS[id],
-      doctrine: this.doctrine,
-      level,
-      damageFrac: this.damageFrac(id),
-      arsenalFrac: start > 0 ? (this.arsenals.get(id) ?? 0) / start : 0,
-    });
-  }
-
-  // Раз в PEACE_CHECK_T разбираем горячие пары: та сторона, что сильнее хочет мира, может
-  // предложить перемирие. Предложение стороне игрока уходит в HUD и ждёт его ответа.
-  private runDiplomacy(dt: number, events: SimEvent[]): void {
-    // Истёкшие предложения игроку — молчание считается отказом.
+  // Истёкшие предложения перемирия: молчание дольше PEACE_OFFER_TIMEOUT — отказ. Правило одно
+  // и для игрока, и для ИИ: предложение всегда ложится «на стол» и ждёт решения (спека §6).
+  private expireOffers(dt: number, events: SimEvent[]): void {
     for (const offer of [...this.offers]) {
       offer.t -= dt;
       if (offer.t > 0) continue;
       this.offers = this.offers.filter((o) => o !== offer);
       events.push({ kind: 'ceasefireRejected', from: offer.from, to: offer.to });
     }
+  }
 
-    this.peaceCheckAcc += dt;
-    if (this.peaceCheckAcc < PEACE_CHECK_T) return;
-    this.peaceCheckAcc = 0;
-    if (this.doctrine === 'off' || this.doctrine === 'doomsday') return;
-
-    for (const [key, rel] of this.relations) {
-      if (rel.level <= 0 || rel.truce > 0 || rel.cooldown > 0) continue;
-      const [a, b] = key.split('|') as [FactionId, FactionId];
-      const wa = this.willingness(a, rel.level);
-      const wb = this.willingness(b, rel.level);
-      const from = wa >= wb ? a : b;
-      const to = from === a ? b : a;
-      if (this.rng.next() >= Math.max(wa, wb)) continue;
-      rel.cooldown = PEACE_COOLDOWN_T;
-      this.handleProposal(from, to, events);
+  // Обиды тают: за GRIEVANCE_HALFLIFE секунд вдвое. Без забывания мир навсегда застревает в
+  // состоянии «все всем должны» — и ни одна страна уже не согласится на мир.
+  private decayGrievances(dt: number): void {
+    const factor = Math.pow(0.5, dt / GRIEVANCE_HALFLIFE);
+    for (const [key, value] of this.grievances) {
+      const next = value * factor;
+      if (next < 0.001) this.grievances.delete(key);
+      else this.grievances.set(key, next);
     }
   }
 
-  // Предложение перемирия: стороне игрока — в HUD с таймером, ИИ решает сразу.
+  private grievanceOf(victim: FactionId, offender: FactionId): number {
+    return this.grievances.get(`${victim}<${offender}`) ?? 0;
+  }
+
+  private addGrievance(victim: FactionId, offender: FactionId, deaths: number): void {
+    const key = `${victim}<${offender}`;
+    this.grievances.set(key, (this.grievances.get(key) ?? 0) + deaths);
+  }
+
+  // Предложение перемирия всегда ложится «на стол» и ждёт решения: игрок отвечает кнопкой,
+  // ИИ-сторона — действием acceptPeace на своём пульсе. Единый путь для обоих (спека §6).
   private handleProposal(from: FactionId, to: FactionId, events: SimEvent[]): void {
     if (from === to) return;
     const rel = this.relation(from, to);
     if (rel.truce > 0) return; // уже мир
-    const forPlayer = to === this.playerSide;
-    events.push({ kind: 'ceasefireProposed', from, to, forPlayer });
-    if (forPlayer) {
-      this.offers.push({ from, to, t: PEACE_OFFER_TIMEOUT });
-      return;
-    }
-    const accept = this.rng.next() < this.willingness(to, rel.level);
-    this.answerOffer(from, to, accept, events);
+    if (this.offers.some((o) => o.from === from && o.to === to)) return; // уже предложено
+    rel.cooldown = PEACE_COOLDOWN_T;
+    this.offers.push({ from, to, t: PEACE_OFFER_TIMEOUT });
+    events.push({ kind: 'ceasefireProposed', from, to, forPlayer: to === this.playerSide });
   }
 
   // Ответ на предложение (игрока или ИИ). Согласие обнуляет накал, даёт перемирие и снимает
@@ -522,10 +502,6 @@ export class Simulation {
     rel.level = 0;
     rel.truce = TRUCE_T;
     rel.quiet = 0;
-    for (const [id, plan] of [...this.pending]) {
-      const pair = (id === from && plan.target === to) || (id === to && plan.target === from);
-      if (pair) this.pending.delete(id);
-    }
     events.push({ kind: 'ceasefireAccepted', from, to });
     events.push(this.factionsEvent());
   }
@@ -539,35 +515,15 @@ export class Simulation {
     return suspects.length > 0 ? suspects[this.rng.int(suspects.length)]!.id : undefined;
   }
 
-  // Ставит/дополняет запланированный ответ стороны. Повторные попадания в окне реакции
-  // копят обиду в ТОЙ ЖЕ записи (залп из шести ракет = один ответ, а не шесть) и не
-  // отодвигают срок; прямая месть перебивает статус «вступаюсь за союзника».
-  private schedule(
-    id: FactionId,
-    target: FactionId,
-    grievance: number,
-    ally: boolean,
-    delay: number,
-  ): void {
-    const cur = this.pending.get(id);
-    if (cur === undefined) {
-      this.pending.set(id, { t: delay, grievance, target, ally });
-      return;
-    }
-    cur.grievance += grievance;
-    cur.target = target;
-    cur.ally = cur.ally && ally;
-    cur.t = Math.min(cur.t, delay);
-  }
-
   // Разбор последствий взрыва: жертва — сторона с наибольшими потерями (нейтральные не
-  // отвечают — у них нет арсенала). Планируем её ответ и вступление союзников.
+  // воюют). Здесь только УЧЁТ: поднимаем ступень эскалации и копим обиду. Что с этим делать —
+  // решает сторона на своём пульсе (спека 2026-08-29-utility-ai §6: очередь ответов удалена).
   private registerStrike(
     hits: CasualtyHit[],
     attacker: FactionId | undefined,
     events: SimEvent[],
   ): void {
-    if (this.doctrine === 'off' || hits.length === 0) return;
+    if (hits.length === 0) return;
 
     const deathsBy = new Map<FactionId, number>();
     for (const h of hits) {
@@ -585,53 +541,141 @@ export class Simulation {
     if (victim === undefined || worst <= ALIVE_EPS) return;
 
     const blame = this.blameFor(victim, attacker);
-    if (blame === undefined) return; // сам себя бомбить в ответ никто не станет
+    if (blame === undefined) return; // сам себе счёт никто не выставляет
     this.escalate(victim, blame, events);
+    this.addGrievance(victim, blame, worst);
+  }
 
-    const delay = this.rng.range(RETALIATION_DELAY_MIN, RETALIATION_DELAY_MAX);
-    this.schedule(victim, blame, worst, false, delay);
-    // Союзники вступаются позже и меньшими силами (responseSize учитывает признак ally).
-    // За союзника не воюют ПРОТИВ своего же союзника: если жертву задел собственный блок
-    // (например, накрыло соседние города при ударе по чужой стране), отвечает только сама
-    // жертва — блок не рвётся на части из-за чужого промаха.
-    for (const ally of alliesOf(victim)) {
-      if (ally === blame || alliesOf(ally).includes(blame)) continue;
-      if (this.inTruce(ally, blame)) continue; // с перемирием ally в чужую войну не лезет
-      this.escalate(ally, blame, events);
-      const extra = this.rng.range(ALLY_DELAY_EXTRA_MIN, ALLY_DELAY_EXTRA_MAX);
-      this.schedule(ally, blame, worst, true, delay + extra);
+  // ---------- Слой решений (Utility AI, спека 2026-08-29-utility-ai-design.md) ----------
+
+  // Контекст решения — снимок того, что сторона знает о мире. Пока данные точные; когда
+  // появится разведка, зашумлять надо будет только здесь.
+  private contextFor(id: FactionId): DecisionContext {
+    const self = FACTIONS.find((f) => f.id === id)!;
+    const cities = this.cities.filter((c) => c.faction === id);
+    const popAlive = cities.reduce((sum, c) => sum + Math.max(0, c.alive), 0);
+    const popTotal = this.popTotals.get(id) ?? 1;
+    const allies = alliesOf(id);
+
+    const rivals: RivalView[] = BELLIGERENTS.filter((f) => f.id !== id).map((f) => {
+      const rivalCities = this.cities.filter((c) => c.faction === f.id);
+      const rivalTotal = this.popTotals.get(f.id) ?? 1;
+      const rivalAlive = rivalCities.reduce((sum, c) => sum + Math.max(0, c.alive), 0);
+      // «Союзника бьют»: максимальная ступень пары «мой союзник ↔ эта сторона».
+      let allyHeat = 0;
+      for (const ally of allies) allyHeat = Math.max(allyHeat, this.levelBetween(ally, f.id));
+      return {
+        id: f.id,
+        level: this.levelBetween(id, f.id),
+        truce: this.inTruce(id, f.id),
+        arsenal: this.arsenals.get(f.id) ?? 0,
+        interceptorsFrac:
+          (this.interceptors.get(f.id) ?? 0) / Math.max(1, DEFENSES[f.id].interceptors),
+        popAliveFrac: rivalAlive / rivalTotal,
+        citiesAlive: rivalCities.filter((c) => c.alive > ALIVE_EPS).length,
+        grievance: this.grievanceOf(id, f.id),
+        offerFromThem: this.offers.some((o) => o.from === f.id && o.to === id),
+        offerPending: this.offers.some(
+          (o) => (o.from === f.id && o.to === id) || (o.from === id && o.to === f.id),
+        ),
+        peaceCooldown: (this.relations.get(Simulation.relKey(id, f.id))?.cooldown ?? 0) > 0,
+        ally: allies.includes(f.id),
+        allyHeat,
+      };
+    });
+
+    return {
+      self: {
+        id,
+        temperament: TEMPERAMENTS[id],
+        arsenal: this.arsenals.get(id) ?? 0,
+        arsenalFrac: (this.arsenals.get(id) ?? 0) / Math.max(1, self.arsenal),
+        interceptorsFrac: (this.interceptors.get(id) ?? 0) / Math.max(1, DEFENSES[id].interceptors),
+        damageFrac: 1 - popAlive / popTotal,
+        citiesAlive: cities.filter((c) => c.alive > ALIVE_EPS).length,
+        sinceStrike: this.aiClock - (this.lastStrikeAt.get(id) ?? -1e6),
+      },
+      rivals,
+      doctrine: this.doctrine,
+      ceiling: doctrineCeiling(this.doctrine),
+    };
+  }
+
+  // Пульс раздумий: стороны разнесены по фазам (страна i думает со смещением i/N·AI_PULSE_T),
+  // поэтому один тик никогда не считает решения всех сразу. Пульс же даёт естественную
+  // задержку реакции 0..AI_PULSE_T секунд — отдельный таймер ответа больше не нужен.
+  private runAi(dt: number, events: SimEvent[]): void {
+    if (this.doctrine === 'off') return;
+    this.aiClock += dt;
+    const n = BELLIGERENTS.length;
+    for (let i = 0; i < n; i++) {
+      const id = BELLIGERENTS[i]!.id;
+      const phase = (i / n) * AI_PULSE_T;
+      const slot = Math.floor((this.aiClock - phase) / AI_PULSE_T);
+      if (slot < 0 || slot === this.lastPulse.get(id)) continue;
+      this.lastPulse.set(id, slot);
+      this.think(id, events);
     }
   }
 
-  // Тик отложенных ответов: у кого истёк срок реакции — поднимает волну по обидчику.
-  private runRetaliations(dt: number, events: SimEvent[]): void {
-    let changed = false;
-    for (const [id, plan] of [...this.pending]) {
-      plan.t -= dt;
-      if (plan.t > 0) continue;
-      this.pending.delete(id);
-      if (this.doctrine === 'off' || !this.canLaunch(id)) continue;
-      if (this.inTruce(id, plan.target)) continue; // перемирие отменяет уже занесённый кулак
+  private think(id: FactionId, events: SimEvent[]): void {
+    const ctx = this.contextFor(id);
+    const decision = decide(ctx, this.rng, this.lastChoice.get(id));
+    this.lastChoice.set(id, { action: decision.action, target: decision.target });
+    events.push({
+      kind: 'decisionMade',
+      faction: id,
+      action: decision.action,
+      target: decision.target,
+      score: decision.score,
+      top: decision.top,
+    });
+    this.execute(id, decision.action, decision.target, ctx, events);
+  }
 
-      const arsenal = this.arsenals.get(id) ?? 0;
-      const level = this.levelBetween(id, plan.target);
-      const size = responseSizeForLevel(level, plan.grievance, arsenal, plan.ally);
-      if (size <= 0) continue;
-      // Цели обидчика могли кончиться, пока шла реакция, — тогда общий выбор целей.
-      const targets =
-        this.citiesOf(plan.target).length > 0 ? this.citiesOf(plan.target) : this.pickTargets(id);
-      const launched = this.launchSalvo(id, targets, size, events);
-      if (launched === 0) continue;
-      events.push({
-        kind: 'retaliationLaunched',
-        from: id,
-        to: plan.target,
-        count: launched,
-        reason: plan.ally ? 'ally' : 'revenge',
-      });
-      changed = true;
+  // Исполнение решения существующими механизмами: удары — через launchSalvo, переговоры —
+  // через handleProposal/answerOffer. Новой боевой логики слой решений не приносит.
+  private execute(
+    id: FactionId,
+    action: Decision['action'],
+    target: FactionId | undefined,
+    ctx: DecisionContext,
+    events: SimEvent[],
+  ): void {
+    if (action === 'wait' || target === undefined) return;
+    const rival = ctx.rivals.find((r) => r.id === target);
+    if (rival === undefined) return;
+
+    if (action === 'proposePeace') {
+      this.handleProposal(id, target, events);
+      return;
     }
-    if (changed) events.push(this.factionsEvent());
+    if (action === 'acceptPeace') {
+      this.answerOffer(target, id, true, events);
+      return;
+    }
+
+    const size = actionSize(action, ctx, rival);
+    if (size <= 0 || !this.canLaunch(id)) return;
+    const targets = this.citiesOf(target).length > 0 ? this.citiesOf(target) : this.pickTargets(id);
+    const launched = this.launchSalvo(id, targets, size, events);
+    if (launched === 0) return;
+    this.lastStrikeAt.set(id, this.aiClock);
+    // Месть удовлетворяет: каждая выпущенная боеголовка гасит часть счёта к этой стороне,
+    // иначе один удар кормит бесконечную череду ответов.
+    const settled = launched * GRIEVANCE_SETTLED_PER_WARHEAD;
+    const key = `${id}<${target}`;
+    this.grievances.set(key, Math.max(0, (this.grievances.get(key) ?? 0) - settled));
+    // Пуск — это тоже эскалация: атакующий поднимает ступень, не дожидаясь прилёта.
+    this.escalate(id, target, events, id);
+    events.push({
+      kind: 'retaliationLaunched',
+      from: id,
+      to: target,
+      count: launched,
+      action,
+    });
+    events.push(this.factionsEvent());
   }
 
   // Снимок изменяемого состояния сторон для HUD (статику он берёт из sim/factions.ts).
@@ -671,12 +715,15 @@ export class Simulation {
     for (const entity of [...this.world.with('warhead')]) this.world.remove(entity);
     this.cities = createCities();
     this.resetArsenals();
-    this.pending.clear(); // запланированные ответы отменяются вместе с войной
+    this.grievances.clear(); // память обид обнуляется вместе с войной
+    this.lastChoice.clear();
+    this.lastPulse.clear();
+    this.lastStrikeAt.clear();
+    this.aiClock = 0;
     this.relations = new Map();
     this.offers = [];
     this.warHappened = false;
     this.quietFor = 0;
-    this.peaceCheckAcc = 0;
     this.outcome = undefined;
     this.bombs = 0;
     this.megatons = 0;

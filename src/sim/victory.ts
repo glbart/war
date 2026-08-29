@@ -5,13 +5,14 @@
 import { FALLEN_FRAC } from '../assets/config';
 import type { FactionId } from './factions';
 
-export type Outcome = 'victory' | 'mutual' | 'exhausted' | 'peace';
+export type Outcome = 'victory' | 'mutual' | 'exhausted' | 'peace' | 'pyrrhic';
 
 export const OUTCOME_TITLES: Record<Outcome, string> = {
   victory: 'Победа',
   mutual: 'Взаимное уничтожение',
   exhausted: 'Арсеналы исчерпаны',
   peace: 'Мир восстановлен',
+  pyrrhic: 'Разорённый мир',
 };
 
 // Снимок одной воюющей стороны для оценки исхода (нейтральные в оценке не участвуют).
@@ -54,6 +55,10 @@ export function evaluateOutcome(
 
   if (state.missilesInFlight > 0) return undefined;
   if (!sides.some(canFight)) return { outcome: 'exhausted' };
-  if (state.atPeace && state.quietFor >= state.peaceHoldT) return { outcome: 'peace' };
+  if (state.atPeace && state.quietFor >= state.peaceHoldT) {
+    // «Мир восстановлен» — только если войну пережили все. Если кто-то стёрт, а уцелевшие
+    // разошлись, это не мир, а разорённый мир: называть вещи своими именами.
+    return standing.length === sides.length ? { outcome: 'peace' } : { outcome: 'pyrrhic' };
+  }
   return undefined;
 }

@@ -49,14 +49,18 @@ describe('ПРО в бою', () => {
 });
 
 describe('Лестница эскалации', () => {
-  it('первый удар — кризис: ответ ограничен демонстрацией из одной ракеты', () => {
+  it('первый удар — кризис: ответ остаётся сдержанным, а не полномасштабным', () => {
     const { events } = strikeThatLands(14, [
       { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
     ]);
     const answer = of(events, 'retaliationLaunched').find((r) => r.from === 'russia');
     expect(answer).toBeDefined();
-    expect(answer!.count).toBe(1);
-    expect(statOf(events, 'russia')!.enemies.find((e) => e.id === 'usa')!.level).toBe(1);
+    // на кризисе сторона выбирает предупреждение или соразмерный ответ, но не тотальный
+    expect(['demonstrate', 'limited']).toContain(answer!.action);
+    expect(answer!.count).toBeLessThanOrEqual(2);
+    expect(
+      statOf(events, 'russia')!.enemies.find((e) => e.id === 'usa')!.level,
+    ).toBeLessThanOrEqual(2);
   });
 
   it('повторные удары поднимают уровень пары и не мельчат ответ', () => {
@@ -94,15 +98,16 @@ describe('Переговоры и перемирие', () => {
     { kind: 'salvo', from: 'usa', to: 'russia' },
   ];
 
-  it('предложение игрока может быть принято, и тогда пара уходит в перемирие', () => {
+  it('предложение игрока обдумывается стороной и может быть принято', () => {
     let accepted: SimEvent[] | undefined;
     for (let seed = 1; seed <= 40 && accepted === undefined; seed++) {
       const sim = new Simulation(seed);
-      run(sim, 14, [
+      run(sim, 20, [
         { kind: 'setSide', faction: 'usa' },
         { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
       ]);
-      const events = run(sim, 2, [{ kind: 'proposeCeasefire', from: 'usa', to: 'russia' }]);
+      // ИИ отвечает не мгновенно, а на своём пульсе раздумий — даём ему время
+      const events = run(sim, 12, [{ kind: 'proposeCeasefire', from: 'usa', to: 'russia' }]);
       if (of(events, 'ceasefireAccepted').length > 0) accepted = events;
     }
     expect(accepted).toBeDefined();
@@ -111,19 +116,26 @@ describe('Переговоры и перемирие', () => {
     expect(truce?.level).toBe(0);
   });
 
-  it('перемирие останавливает уже занесённый ответный удар', () => {
+  it('перемирие держит стороны: пока оно в силе, ударов по партнёру нет', () => {
     let checked = false;
     for (let seed = 1; seed <= 40 && !checked; seed++) {
       const sim = new Simulation(seed);
-      // бьём и тут же, пока идёт реакция, предлагаем мир
-      run(sim, 3.2, [
+      run(sim, 20, [
         { kind: 'setSide', faction: 'usa' },
         { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
       ]);
-      const answer = run(sim, 1, [{ kind: 'proposeCeasefire', from: 'usa', to: 'russia' }]);
+      const answer = run(sim, 12, [{ kind: 'proposeCeasefire', from: 'usa', to: 'russia' }]);
       if (of(answer, 'ceasefireAccepted').length === 0) continue;
-      const after = run(sim, 20);
-      expect(of(after, 'retaliationLaunched').filter((r) => r.to === 'usa')).toHaveLength(0);
+      const after = run(sim, 25);
+      // пока перемирие не сорвано прилётом, пара не обменивается ударами
+      const broken = of(after, 'truceBroken').some(
+        (t) =>
+          (t.by === 'usa' && t.against === 'russia') || (t.by === 'russia' && t.against === 'usa'),
+      );
+      const strikes = of(after, 'retaliationLaunched').filter(
+        (r) => (r.from === 'russia' && r.to === 'usa') || (r.from === 'usa' && r.to === 'russia'),
+      );
+      if (!broken) expect(strikes).toHaveLength(0);
       checked = true;
     }
     expect(checked).toBe(true);
@@ -196,7 +208,7 @@ describe('Условия победы в партии', () => {
     ]);
     const over = of(events, 'gameOver');
     expect(over).toHaveLength(1);
-    expect(['victory', 'mutual', 'exhausted', 'peace']).toContain(over[0]!.outcome);
+    expect(['victory', 'mutual', 'exhausted', 'peace', 'pyrrhic']).toContain(over[0]!.outcome);
     const summary = over[0]!.summary;
     expect(summary.length).toBeGreaterThan(0);
     expect(summary.reduce((s, r) => s + r.launched, 0)).toBeGreaterThan(0);
@@ -206,18 +218,18 @@ describe('Условия победы в партии', () => {
     const { sim, events: first } = strikeThatLands(20, [
       { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
     ]);
-    const events = [...first, ...run(sim, 400)];
+    const events = [...first, ...run(sim, 900)];
     const over = of(events, 'gameOver');
     expect(over).toHaveLength(1);
-    expect(['victory', 'mutual', 'exhausted', 'peace']).toContain(over[0]!.outcome);
+    expect(['victory', 'mutual', 'exhausted', 'peace', 'pyrrhic']).toContain(over[0]!.outcome);
   });
 
   it('reset начинает партию заново: исход может прийти снова', () => {
     const { sim } = strikeThatLands(20, [
       { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
     ]);
-    run(sim, 400);
-    const again = run(sim, 400, [{ kind: 'reset' }, { kind: 'salvo', from: 'usa', to: 'russia' }]);
+    run(sim, 900);
+    const again = run(sim, 900, [{ kind: 'reset' }, { kind: 'salvo', from: 'usa', to: 'russia' }]);
     expect(of(again, 'gameOver')).toHaveLength(1);
   });
 

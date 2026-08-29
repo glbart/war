@@ -16,6 +16,7 @@ import {
   type Doctrine,
 } from '../sim/diplomacy';
 import { OUTCOME_TITLES, type Outcome } from '../sim/victory';
+import { ACTION_NAMES, type ActionId, type Candidate } from '../sim/ai/types';
 import { createCities } from '../sim/cities';
 
 const DEFAULT_YIELD = 100;
@@ -99,6 +100,14 @@ export class Hud {
   private readonly overEl: HTMLElement; // экран итогов партии
   private readonly overBodyEl: HTMLElement;
   private lastStats: FactionStat[] = [];
+  // Панель «почему»: последнее решение каждой стороны с разложением оценок (спека
+  // 2026-08-29-utility-ai §7). Клик по строке стороны раскрывает её логику.
+  private readonly decisions = new Map<
+    FactionId,
+    { action: ActionId; target?: FactionId; score: number; top: Candidate[] }
+  >();
+  private whyFor: FactionId | undefined;
+  private readonly whyEl: HTMLElement;
 
   // Метка времени (performance.now()) последнего explosionStarted — база задержки atWaveTime
   // для последующих cityHit (тот же кадровый батч событий), чтобы города «гасли» в ленте
@@ -124,6 +133,7 @@ export class Hud {
       </div>
       <div id="feed"></div>
       <div id="factions"></div>
+      <div id="why" style="display: none"></div>
       <div class="row">
         <button data-yield="1">1 Мт</button>
         <button data-yield="10">10 Мт</button>
@@ -168,6 +178,7 @@ export class Hud {
     const { overlay, body } = this.buildGameOver();
     this.overEl = overlay;
     this.overBodyEl = body;
+    this.whyEl = root.querySelector<HTMLElement>('#why')!;
     this.buildFactionRows(root.querySelector<HTMLElement>('#factions')!);
     this.buildSideSelects();
     this.buildDoctrineSelect();
@@ -235,6 +246,8 @@ export class Hud {
       const ars = document.createElement('span');
       ars.className = 'f-ars';
       row.append(dot, name, war, pop, ars);
+      // Клик по строке — «почему»: показать, из чего сложилось решение этой стороны.
+      row.addEventListener('click', () => this.toggleWhy(f.id));
       container.append(row);
       this.factionRows.set(f.id, { pop, ars, war, row });
     }
@@ -257,6 +270,39 @@ export class Hud {
     };
     fill(this.attackerSel, BELLIGERENTS);
     fill(this.targetSel, FACTIONS);
+  }
+
+  // Раскрывает/прячет разложение последнего решения стороны.
+  private toggleWhy(id: FactionId): void {
+    this.whyFor = this.whyFor === id ? undefined : id;
+    this.renderWhy();
+  }
+
+  // Панель «почему»: выбранное действие и лучшие альтернативы с вкладом каждого соображения.
+  // Данные — ровно те, по которым решал алгоритм (событие decisionMade), без пересчёта.
+  private renderWhy(): void {
+    const id = this.whyFor;
+    if (id === undefined) {
+      this.whyEl.style.display = 'none';
+      return;
+    }
+    this.whyEl.style.display = '';
+    const d = this.decisions.get(id);
+    if (d === undefined) {
+      this.whyEl.textContent = `${factionById(id).name}: решений ещё не принимала`;
+      return;
+    }
+    const head = `${factionById(id).name}: ${ACTION_NAMES[d.action]}${
+      d.target ? ' → ' + factionById(d.target).name : ''
+    } (${d.score.toFixed(2)})`;
+    const rows = d.top
+      .map((c) => {
+        const label = `${ACTION_NAMES[c.action]}${c.target ? ' → ' + factionById(c.target).name : ''}`;
+        const parts = c.considerations.map((k) => `${k.name} ${k.value.toFixed(2)}`).join(' · ');
+        return `<div class="why-row"><b>${c.score.toFixed(2)}</b> ${label}<br><span>${parts}</span></div>`;
+      })
+      .join('');
+    this.whyEl.innerHTML = `<div class="why-head">${head}</div>${rows}`;
   }
 
   // Доктрина ответа: чем сторона отвечает на удар по себе. Значение ставит симуляция
@@ -371,7 +417,7 @@ export class Hud {
         this.updateFactions(e.factions);
         break;
       case 'retaliationLaunched':
-        this.pushWarEntry(e.from, e.to, e.count, e.reason);
+        this.pushWarEntry(e.from, e.to, e.count, e.action);
         break;
       case 'doctrineChanged':
         this.doctrineSel.value = e.doctrine;
@@ -406,6 +452,15 @@ export class Hud {
           'war',
         );
         break;
+      case 'decisionMade':
+        this.decisions.set(e.faction, {
+          action: e.action,
+          target: e.target,
+          score: e.score,
+          top: e.top,
+        });
+        if (this.whyFor === e.faction) this.renderWhy();
+        break;
       case 'gameOver':
         this.showGameOver(e.outcome, e.winner, e.summary);
         break;
@@ -419,6 +474,8 @@ export class Hud {
         this.feedEl.replaceChildren();
         this.offer = undefined;
         this.offerEl.style.display = 'none';
+        this.decisions.clear();
+        this.renderWhy();
         this.overEl.style.display = 'none';
         break;
       case 'labelsToggled':
@@ -536,15 +593,10 @@ export class Hud {
   }
 
   // Строка ленты об ответном ударе — сразу, без задержки волны (это пуск, а не прилёт).
-  private pushWarEntry(
-    from: FactionId,
-    to: FactionId,
-    count: number,
-    reason: 'revenge' | 'ally',
-  ): void {
+  private pushWarEntry(from: FactionId, to: FactionId, count: number, action: ActionId): void {
     const div = document.createElement('div');
     div.className = 'war';
-    const why = reason === 'ally' ? 'за союзника' : 'ответный удар';
+    const why = ACTION_NAMES[action];
     div.textContent = `☢ ${factionById(from).name} → ${factionById(to).name}: ${count} ${plural(count)} (${why})`;
     this.feedEl.prepend(div);
     while (this.feedEl.children.length > FEED_MAX_ENTRIES) this.feedEl.lastChild?.remove();
