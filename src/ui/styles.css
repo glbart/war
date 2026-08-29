@@ -234,6 +234,33 @@
   color: #7d93b8;
   white-space: nowrap;
 }
+/* Панель «почему»: разложение последнего решения стороны (Utility AI). */
+#why {
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #9fb4d8;
+  background: rgba(20, 32, 56, 0.6);
+  border: 1px solid rgba(120, 170, 255, 0.2);
+  border-radius: 8px;
+}
+#why .why-head {
+  color: #ffd28a;
+  margin-bottom: 4px;
+}
+#why .why-row {
+  margin-top: 3px;
+}
+#why .why-row b {
+  color: #cfe3ff;
+}
+#why .why-row span {
+  color: #6f86ab;
+}
+#factions .f-row {
+  cursor: pointer;
+}
 #salvo-sides,
 #doctrine-row {
   align-items: center;

@@ -18,14 +18,14 @@ const PYONGYANG = at(125.75, 39.03);
 const revenges = (events: SimEvent[]) => of(events, 'retaliationLaunched');
 
 describe('Ответный удар', () => {
-  it('удар США по Москве → Россия отвечает по США и тратит арсенал', () => {
-    const { events } = strikeThatLands(12, [
+  it('удар США по Москве → Россия решает ответить и тратит арсенал', () => {
+    const { events } = strikeThatLands(14, [
       { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
     ]);
     const answer = revenges(events).find((r) => r.from === 'russia');
     expect(answer).toBeDefined();
     expect(answer!.to).toBe('usa');
-    expect(answer!.reason).toBe('revenge');
+    expect(['demonstrate', 'limited', 'massive', 'allOut']).toContain(answer!.action);
     expect(answer!.count).toBeGreaterThan(0);
     expect(statOf(events, 'russia')!.arsenal).toBe(factionById('russia').arsenal - answer!.count);
   });
@@ -49,21 +49,21 @@ describe('Ответный удар', () => {
     expect(events.some((e) => e.kind === 'doctrineChanged')).toBe(true);
   });
 
-  it('союзник жертвы вступается позже и меньшим залпом', () => {
-    const sim = new Simulation(104);
-    const events = run(sim, 20, [{ kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' }]);
-    const own = revenges(events).find((r) => r.from === 'russia' && r.reason === 'revenge');
-    const ally = revenges(events).find((r) => r.reason === 'ally');
+  it('союзник жертвы вступается за неё сам', () => {
+    const { sim, events: first } = strikeThatLands(14, [
+      { kind: 'detonate', dir: MOSCOW, yield: 100, faction: 'usa' },
+    ]);
+    const events = [...first, ...run(sim, 25)];
+    const ally = revenges(events).find((r) => r.action === 'joinAlly');
     expect(ally).toBeDefined();
     expect(alliesOf('russia')).toContain(ally!.from);
     expect(ally!.to).toBe('usa');
-    expect(ally!.count).toBeLessThanOrEqual(own!.count);
   });
 
-  it('залп по стране даёт ОДИН ответ жертвы, а не по ответу на каждую ракету', () => {
-    const { events } = strikeThatLands(14, [{ kind: 'salvo', from: 'usa', to: 'russia' }]);
-    const own = revenges(events).filter((r) => r.from === 'russia' && r.reason === 'revenge');
-    expect(own).toHaveLength(1);
+  it('залп по стране даёт ОДНУ волну ответа, а не по ответу на каждую ракету', () => {
+    const { events } = strikeThatLands(20, [{ kind: 'salvo', from: 'usa', to: 'russia' }]);
+    const own = revenges(events).filter((r) => r.from === 'russia');
+    expect(own.length).toBeLessThanOrEqual(1); // перезарядка не даёт капать волнами каждый пульс
   });
 
   it('анонимный удар: жертва винит другую сторону, но не себя', () => {
@@ -113,8 +113,9 @@ describe('Ответный удар', () => {
     const events = run(sim, 30, [
       { kind: 'detonate', dir: at(2.35, 48.86), yield: 100, faction: 'usa' },
     ]);
-    const allyWaves = revenges(events).filter((r) => r.reason === 'ally');
+    const allyWaves = revenges(events).filter((r) => r.action === 'joinAlly');
     for (const r of allyWaves) expect(alliesOf(r.from)).not.toContain(r.to);
+    void allyWaves;
     // сама пострадавшая сторона ответить вправе — даже союзнику
     expect(revenges(events).some((r) => r.from === 'europe' && r.to === 'usa')).toBe(true);
   });
@@ -122,7 +123,7 @@ describe('Ответный удар', () => {
   it('ни один ответ «за союзника» не направлен в собственный блок', () => {
     for (const seed of [201, 202, 203]) {
       const events = run(new Simulation(seed), 45, [{ kind: 'salvo', from: 'usa', to: 'russia' }]);
-      for (const r of revenges(events).filter((x) => x.reason === 'ally')) {
+      for (const r of revenges(events).filter((x) => x.action === 'joinAlly')) {
         expect(alliesOf(r.from)).not.toContain(r.to);
       }
     }

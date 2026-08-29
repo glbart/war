@@ -130,16 +130,20 @@ describe('Simulation: залп МБР по сторонам', () => {
     expect(a).toEqual(b);
   });
 
-  it('взрывы приходят по индивидуальным flightTime (после максимального — все взорвались)', () => {
+  it('судьба каждой ракеты залпа решается к концу её полёта: взрыв или перехват', () => {
     const sim = new Simulation(7);
     const ls = launches(sim.step(TICK_DT, [{ kind: 'salvo', from: 'china', to: 'india' }]));
+    const ids = new Set(ls.map((e) => e.id));
     const maxT = Math.max(...ls.map((e) => e.flightTime));
-    let explosions = 0;
+    const resolved = new Set<number>();
     const steps = Math.ceil((maxT + 1) / TICK_DT);
     for (let i = 0; i < steps; i++) {
-      for (const e of sim.step(TICK_DT, [])) if (e.kind === 'explosionStarted') explosions++;
+      for (const e of sim.step(TICK_DT, [])) {
+        if (e.kind === 'explosionStarted' && ids.has(e.id)) resolved.add(e.id);
+        if (e.kind === 'interception' && e.success && ids.has(e.id)) resolved.add(e.id);
+      }
     }
-    expect(explosions).toBe(ls.length);
+    expect(resolved.size).toBe(ids.size);
   });
 
   it('ручной detonate остаётся ударом из космоса: без from/фракции, прежний тайминг', () => {

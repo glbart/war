@@ -3,6 +3,7 @@ import type { Surface, Biome } from './material';
 import type { FactionId } from './factions';
 import type { Doctrine } from './diplomacy';
 import type { Outcome } from './victory';
+import type { ActionId, Candidate } from './ai/types';
 
 // Изменяемое состояние стороны для HUD (статику — название/цвет/исходное население — HUD
 // берёт из sim/factions.ts напрямую, чтобы не гонять её в каждом событии).
@@ -67,9 +68,19 @@ export type SimEvent =
       from: FactionId;
       to: FactionId;
       count: number;
-      reason: 'revenge' | 'ally';
+      action: ActionId; // каким именно решением поднята волна
     }
   | { kind: 'doctrineChanged'; doctrine: Doctrine }
+  // Решение стороны на её пульсе: выбранное действие и разложение лучших вариантов —
+  // это же и питает панель «почему» в HUD (спека 2026-08-29-utility-ai §7).
+  | {
+      kind: 'decisionMade';
+      faction: FactionId;
+      action: ActionId;
+      target?: FactionId;
+      score: number;
+      top: Candidate[];
+    }
   // Работа ПРО: by — кто перехватывал, pos — точка вспышки (в радиусах планеты),
   // success — сбита ли боеголовка (промах тоже тратит перехватчик).
   | { kind: 'interception'; id: number; by: FactionId; pos: Vec3; success: boolean }
