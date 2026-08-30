@@ -5,6 +5,7 @@ import { DamageField } from './render/DamageField';
 import { HoleMask } from './render/HoleMask';
 import { TileLayers } from './render/TileLayers';
 import { Scene } from './render/Scene';
+import { MapView } from './render/MapView';
 import { CameraRig } from './input/CameraRig';
 import { PointerController } from './input/PointerController';
 import { LocalSimHost } from './sim/SimHost';
@@ -83,6 +84,78 @@ async function boot() {
   // Мост sim↔render: ракеты, взрывы (огонь/волна/частицы), кратеры-декали, тряска камеры, звук.
   const scene = new Scene(renderer.ctx, globe, host, rig, damageField, holeMask);
 
+  // Плоская политическая карта: своя сцена и ортокамера, переключается кнопкой HUD или «M».
+  // Реальные границы Natural Earth, заливка по сторонам (спека 2026-08-29-flat-map-design.md).
+  const map = new MapView(renderer.ctx);
+  map.resize(window.innerWidth, window.innerHeight);
+  let mapMode = false;
+  const setMapMode = (on: boolean) => {
+    mapMode = on;
+    renderer.setViewOverride(on ? { scene: map.scene, camera: map.camera } : undefined);
+    pointer.enabled = !on;
+    hud.setMapMode(on);
+  };
+  hud.onToggleMap = () => setMapMode(!mapMode);
+  hud.onProgramSelect = (id) => map.setHighlight(id);
+  if (import.meta.env.DEV) {
+    const { installMapHook } = await import('./debug/devHooks');
+    installMapHook(map);
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') setMapMode(!mapMode);
+  });
+
+  // Управление картой: драг — панорама, колесо — зум, клик — удар по точке (та же команда,
+  // что и с глобуса). Глобусный контроллер на это время выключен.
+  let mapDown = false;
+  let mapDragged = false;
+  let lastX = 0;
+  let lastY = 0;
+  canvas.addEventListener('pointerdown', (e) => {
+    if (!mapMode) return;
+    mapDown = true;
+    mapDragged = false;
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!mapMode || !mapDown) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    if (Math.abs(dx) + Math.abs(dy) > 2) mapDragged = true;
+    map.panBy(dx, dy, window.innerHeight);
+  });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!mapMode) return;
+    mapDown = false;
+    if (mapDragged) return;
+    // Shift+клик выбирает страну под курсором как цель инструментов, обычный клик — удар.
+    if (e.shiftKey) {
+      const owner = map.factionAtScreen(
+        e.clientX,
+        e.clientY,
+        window.innerWidth,
+        window.innerHeight,
+      );
+      hud.selectProgramExternal(owner);
+      return;
+    }
+    const dir = map.pick(e.clientX, e.clientY, window.innerWidth, window.innerHeight);
+    if (dir)
+      host.post({ kind: 'detonate', dir, yield: hud.currentYield, faction: hud.currentSide });
+  });
+  canvas.addEventListener(
+    'wheel',
+    (e) => {
+      if (!mapMode) return;
+      e.preventDefault();
+      map.zoomBy(e.deltaY * 0.0012);
+    },
+    { passive: false },
+  );
+
   // Dev-зонд поля воды (__waterStats) — как и installDevHooks, только в dev-сборке.
   if (import.meta.env.DEV) {
     const { installWaterProbe } = await import('./debug/devHooks');
@@ -93,7 +166,10 @@ async function boot() {
   const tiles = new TileLayers(renderer.ctx, globe, rig);
   let tileAcc = 0;
 
-  window.addEventListener('resize', () => renderer.resize(window.innerWidth, window.innerHeight));
+  window.addEventListener('resize', () => {
+    renderer.resize(window.innerWidth, window.innerHeight);
+    map.resize(window.innerWidth, window.innerHeight);
+  });
 
   const loop = new GameLoop(
     (dt) => host.step(dt),
@@ -105,6 +181,9 @@ async function boot() {
       for (const event of events) {
         hud.onEvent(event);
         if (event.kind === 'labelsToggled') tiles.setLabelsEnabled(event.enabled);
+        // Карта живёт теми же событиями, что и глобус: города гаснут синхронно.
+        if (event.kind === 'cityHit') map.setCityAlive(event.name, event.alive);
+        if (event.kind === 'planetReset') map.clearCities();
       }
 
       scene.update(frame);

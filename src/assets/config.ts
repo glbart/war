@@ -334,3 +334,14 @@ export const PROGRESS_NOISE_SCALE = 0.25; // максимум шума в пок
 export const SPONSOR_SPEEDUP = 1.6;
 export const SPONSOR_MONEY_RATE = 1.6; // спонсор оплачивает работы подопечного
 export const SPONSOR_MIN_DESIRE = 0.45; // ниже этого держава не станет спонсировать
+
+// ---------- Плоская политическая карта (спека 2026-08-29-flat-map-design.md) ----------
+// Цвета карты (r,g,b 0..1). Заливка стран приглушается, чтобы поверх читались маркеры и следы.
+export const MAP_WATER_COLOR = [0.05, 0.09, 0.16] as const;
+export const MAP_BORDER_COLOR = [0.02, 0.03, 0.05] as const;
+export const MAP_NEUTRAL_COLOR = [0.38, 0.4, 0.44] as const;
+export const MAP_FILL_MUTE = 0.72; // множитель насыщенности заливки
+export const MAP_HIGHLIGHT = 1.45; // во сколько раз ярче выбранная страна
+export const MAP_ZOOM_MIN = 0.7; // можно отойти дальше границ карты, чтобы видеть весь мир
+export const MAP_ZOOM_MAX = 8;
+export const MAP_MARKER_SIZE = 0.012; // доля высоты карты

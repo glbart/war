@@ -17,6 +17,8 @@ export interface Vec3 {
 export class PointerController {
   // true, пока кнопка/палец удерживает канвас — читается CameraRig.update() для паузы инерции.
   isDown = false;
+  // В режиме плоской карты глобусом не управляют: контроллер молча пропускает события.
+  enabled = true;
 
   private dragging = false;
   private lastX = 0;
@@ -43,6 +45,7 @@ export class PointerController {
   }
 
   private handlePointerDown = (e: PointerEvent): void => {
+    if (!this.enabled) return;
     this.isDown = true;
     this.dragging = false;
     this.lastX = this.downX = e.clientX;
@@ -55,7 +58,7 @@ export class PointerController {
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
-    if (!this.isDown) return;
+    if (!this.enabled || !this.isDown) return;
     const dx = e.clientX - this.lastX;
     const dy = e.clientY - this.lastY;
     this.lastX = e.clientX;
@@ -67,12 +70,14 @@ export class PointerController {
   };
 
   private handlePointerUp = (e: PointerEvent): void => {
+    if (!this.enabled) return;
     this.isDown = false;
     if (this.dragging) return;
     this.handleClick(e.clientX, e.clientY);
   };
 
   private handleWheel = (e: WheelEvent): void => {
+    if (!this.enabled) return;
     e.preventDefault();
     this.rig.zoom = this.ctx.THREE.MathUtils.clamp(
       this.rig.zoom * (1 + e.deltaY * WHEEL_ZOOM_SENSITIVITY),
