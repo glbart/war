@@ -4,7 +4,7 @@ import type { Entity } from '../ecs/components';
 import { computeCasualties, type CasualtyHit } from '../ecs/systems/CasualtySystem';
 import { createCities, type City } from './cities';
 import type { Command } from './commands';
-import type { SimEvent, FactionStat, SideSummary } from './events';
+import type { SimEvent, FactionStat, SideSummary, ProgramView } from './events';
 import {
   YIELDS,
   SALVO_COUNT,
@@ -32,6 +32,20 @@ import {
   CASCADE_MOTIVATION,
   NEW_POWER_ARSENAL,
   NEW_POWER_INTERCEPTORS,
+  PROGRAM_COST_RATE,
+  PROGRAM_STARVED_RATE,
+  COST_RESOLUTION,
+  COST_GUARANTEE,
+  COST_RECON,
+  RECON_GAIN,
+  GUARANTEE_UPKEEP,
+  GUARANTEE_MOTIVATION_FLOOR,
+  GUARANTEE_BREAK_SPIKE,
+  SPONSOR_REVEAL,
+  SPONSOR_SPEEDUP,
+  SPONSOR_MONEY_RATE,
+  RESOLUTION_COOLDOWN_T,
+  SUSPICION_REVEAL,
   ESCALATION_DECAY_T,
   TRUCE_T,
   PEACE_OFFER_TIMEOUT,
@@ -43,7 +57,14 @@ import { materialAtDir } from './material';
 import { angleBetween, jitterDir, type Vec3 } from './geo';
 import { flightTimeFor, ballisticPos, spaceStrikePos } from './ballistics';
 
-import { FACTIONS, BELLIGERENTS, ASPIRANTS, isFactionId, type FactionId } from './factions';
+import {
+  FACTIONS,
+  BELLIGERENTS,
+  ASPIRANTS,
+  NUCLEAR_POWERS,
+  isFactionId,
+  type FactionId,
+} from './factions';
 import {
   alliesOf,
   doctrineCeiling,
@@ -57,6 +78,17 @@ import { actionSize } from './ai/actions';
 import type { Decision, DecisionContext, RivalView } from './ai/types';
 import { DEFENSES, interceptChance, defenderFor } from './defense';
 import { evaluateOutcome, type Outcome, type SideSnapshot } from './victory';
+import { createEconomy, tickEconomy, type EconomyState } from './economy';
+import { decayIntel, effectiveKnowledge, noisyProgress } from './espionage';
+import {
+  voteOf,
+  resolutionOutcome,
+  hostilityOf,
+  type ResolutionKind,
+  type VoteContext,
+} from './un';
+import { wantsToSponsor } from './sponsorship';
+import { scenarioById, isScenarioId, DEFAULT_SCENARIO, type ScenarioId } from './scenarios';
 import {
   ASPIRANT_PROFILES,
   createProgram,
@@ -181,7 +213,24 @@ export class Simulation {
   private campaignAcc = 0; // аккумулятор для секундного снимка кампании
   private revealedSeen = new Set<FactionId>();
   private armedOrder: FactionId[] = [];
-  private toolUse = { treaties: 0, sanctions: 0, sabotages: 0, strikes: 0 };
+  private toolUse = {
+    treaties: 0,
+    sanctions: 0,
+    sabotages: 0,
+    strikes: 0,
+    resolutions: 0,
+    guarantees: 0,
+  };
+  // Глубокая симуляция (спека 2026-08-29-deep-simulation): экономика, разведка, зонтики,
+  // спонсоры, коалиционные санкции и сценарий партии.
+  private economies = new Map<FactionId, EconomyState>();
+  private intel = new Map<FactionId, number>();
+  private guarantees = new Set<FactionId>();
+  private sponsors = new Map<FactionId, FactionId>();
+  private coalition = new Map<FactionId, number>(); // сек действия КОАЛИЦИОННЫХ санкций
+  private resolutionCooldown = new Map<FactionId, number>();
+  private scenario: ScenarioId = DEFAULT_SCENARIO;
+  private sponsorAcc = 0;
 
   constructor(seed: number) {
     this.rng = new Rng(seed);
@@ -197,12 +246,41 @@ export class Simulation {
     this.programs = new Map(
       ASPIRANTS.map((f) => [f.id, createProgram(f.id, ASPIRANT_PROFILES[f.id]!)]),
     );
-    this.influence = INFLUENCE_START;
+    this.economies = new Map(FACTIONS.map((f) => [f.id, createEconomy(f.id)]));
+    this.intel = new Map(ASPIRANTS.map((f) => [f.id, 0]));
+    this.guarantees = new Set();
+    this.sponsors = new Map();
+    this.coalition = new Map();
+    this.resolutionCooldown = new Map();
     this.elapsed = 0;
     this.campaignAcc = 0;
     this.revealedSeen = new Set();
     this.armedOrder = [];
-    this.toolUse = { treaties: 0, sanctions: 0, sabotages: 0, strikes: 0 };
+    this.toolUse = {
+      treaties: 0,
+      sanctions: 0,
+      sabotages: 0,
+      strikes: 0,
+      resolutions: 0,
+      guarantees: 0,
+    };
+
+    // Стартовые условия сценария: влияние, доктрина, заделы программ и уже начатые кризисы.
+    const scenario = scenarioById(this.scenario);
+    this.influence = scenario.influence;
+    this.doctrine = scenario.doctrine;
+    for (const [id, setup] of Object.entries(scenario.programs)) {
+      const program = this.programs.get(id as FactionId);
+      if (program === undefined || setup === undefined) continue;
+      program.stage = setup.stage;
+      program.progress = setup.progress ?? 0;
+      if (setup.motivation !== undefined) program.motivation = setup.motivation;
+    }
+    for (const rel of scenario.relations) {
+      const r = this.relation(rel.a, rel.b);
+      r.level = rel.level;
+      this.warHappened = this.warHappened || rel.level > 0;
+    }
   }
 
   private resetArsenals(): void {
@@ -224,6 +302,9 @@ export class Simulation {
     if (!this.bootstrapped) {
       this.bootstrapped = true;
       events.push(this.factionsEvent());
+      // И стартовый снимок кампании: иначе HUD первую секунду думает, что влияния нет,
+      // и держит инструменты выключенными.
+      events.push(this.campaignEvent());
     }
 
     for (const cmd of commands) this.applyCommand(cmd, events);
@@ -296,6 +377,33 @@ export class Simulation {
       case 'sabotage':
         assertValidFaction(cmd.target);
         this.applyTool(cmd.kind, cmd.target, events);
+        break;
+      case 'recon':
+        assertValidFaction(cmd.target);
+        this.applyRecon(cmd.target, events);
+        break;
+      case 'offerGuarantee':
+        assertValidFaction(cmd.target);
+        this.applyGuarantee(cmd.target, events);
+        break;
+      case 'revokeGuarantee':
+        assertValidFaction(cmd.target);
+        if (this.guarantees.delete(cmd.target)) {
+          events.push({ kind: 'guaranteeChanged', faction: cmd.target, active: false });
+          events.push(this.campaignEvent());
+        }
+        break;
+      case 'proposeResolution':
+        assertValidFaction(cmd.target);
+        this.applyResolution(cmd.target, cmd.resolution, events);
+        break;
+      case 'setScenario':
+        if (!isScenarioId(cmd.scenario)) {
+          throw new Error(`Неизвестный сценарий: ${String(cmd.scenario)}.`);
+        }
+        this.scenario = cmd.scenario;
+        events.push({ kind: 'scenarioChanged', scenario: this.scenario });
+        this.applyReset(events); // сценарий задаёт стартовые условия — партия начинается заново
         break;
       case 'setDoctrine':
         if (!isDoctrine(cmd.doctrine)) {
@@ -612,6 +720,16 @@ export class Simulation {
       }
     }
 
+    // Зонтик обязывает: удар по подзащитной стране ссорит игрока с агрессором.
+    if (
+      this.guarantees.has(victim) &&
+      attacker !== undefined &&
+      this.playerSide !== undefined &&
+      attacker !== this.playerSide
+    ) {
+      this.escalate(this.playerSide, attacker, events);
+    }
+
     const blame = this.blameFor(victim, attacker);
     if (blame === undefined) return; // сам себе счёт никто не выставляет
     this.escalate(victim, blame, events);
@@ -632,15 +750,29 @@ export class Simulation {
     return heat;
   }
 
-  // Тик программ: прогресс, мотивация, испытания, доход влияния и секундный снимок для HUD.
+  // Тик кампании: экономика всех стран, финансирование и ход программ, зонтики, разведка,
+  // спонсорские решения соперников и секундный снимок для HUD.
   private runCampaign(dt: number, events: SimEvent[]): void {
     this.elapsed += dt;
-    this.influence = Math.min(999, this.influence + INFLUENCE_RATE * dt);
+
+    this.tickEconomies(dt);
+    this.tickGuarantees(dt, events);
+    // Влияние капает пропорционально экономике страны игрока: разорённая держава не давит.
+    const playerEconomy = this.playerSide ? (this.economies.get(this.playerSide)?.economy ?? 1) : 1;
+    this.influence = Math.min(999, this.influence + INFLUENCE_RATE * playerEconomy * dt);
+
+    for (const [id, value] of this.intel) this.intel.set(id, decayIntel(value, dt));
+    for (const [id, left] of this.coalition) this.coalition.set(id, Math.max(0, left - dt));
+    for (const [id, left] of this.resolutionCooldown) {
+      this.resolutionCooldown.set(id, Math.max(0, left - dt));
+    }
 
     for (const program of this.programs.values()) {
-      const base = ASPIRANT_PROFILES[program.id]!.motivation;
+      const base = this.guarantees.has(program.id)
+        ? GUARANTEE_MOTIVATION_FLOOR
+        : ASPIRANT_PROFILES[program.id]!.motivation;
       program.motivation = motivationDrift(program, base, this.threatFor(program.id), dt);
-      const tested = advanceProgram(program, dt);
+      const tested = advanceProgram(program, dt, this.fundProgram(program, dt));
 
       if (!this.revealedSeen.has(program.id) && isRevealed(program) && program.stage !== 'armed') {
         this.revealedSeen.add(program.id);
@@ -649,15 +781,117 @@ export class Simulation {
       if (tested) this.armCountry(program, events);
     }
 
+    this.tickSponsorship(dt, events);
+
     this.campaignAcc += dt;
     if (this.campaignAcc >= 1) {
       this.campaignAcc = 0;
-      events.push({
-        kind: 'campaignChanged',
-        influence: this.influence,
-        elapsed: this.elapsed,
-        programs: [...this.programs.values()].map((p) => this.programView(p)),
+      events.push(this.campaignEvent());
+    }
+  }
+
+  // Экономика: доход, урон от санкций (коалиционные вдвое), цена собственных санкций и
+  // восстановление, ограниченное выжившим населением.
+  private tickEconomies(dt: number): void {
+    const ownSanctions = [...this.programs.values()].filter((p) => p.sanctions > 0).length;
+    for (const f of FACTIONS) {
+      const eco = this.economies.get(f.id);
+      if (eco === undefined) continue;
+      const program = this.programs.get(f.id);
+      const total = this.popTotals.get(f.id) ?? 1;
+      const alive = this.cities
+        .filter((c) => c.faction === f.id)
+        .reduce((sum, c) => sum + Math.max(0, c.alive), 0);
+      tickEconomy(eco, f.id, dt, {
+        sanctioned: (program?.sanctions ?? 0) > 0,
+        coalition: (this.coalition.get(f.id) ?? 0) > 0,
+        // Санкции держит только игрок — за них платит он.
+        ownSanctions: f.id === this.playerSide ? ownSanctions : 0,
+        populationFrac: total > 0 ? alive / total : 1,
       });
+    }
+  }
+
+  // Финансирование программы: работы едят бюджет страны, спонсор платит за подопечного и
+  // ускоряет темп. Нет денег — программа не встаёт совсем, но ползёт вчетверо медленнее.
+  private fundProgram(program: Program, dt: number): number {
+    const eco = this.economies.get(program.id);
+    if (eco === undefined) return 1;
+    const sponsor = this.sponsors.get(program.id);
+    let multiplier = 1;
+
+    if (sponsor !== undefined) {
+      const patron = this.economies.get(sponsor);
+      const bill = SPONSOR_MONEY_RATE * dt;
+      if (patron !== undefined && patron.budget >= bill) {
+        patron.budget -= bill;
+        eco.budget += bill;
+        multiplier *= SPONSOR_SPEEDUP;
+      }
+    }
+
+    const cost = PROGRAM_COST_RATE * dt;
+    if (eco.budget >= cost) eco.budget -= cost;
+    else {
+      eco.budget = 0;
+      multiplier *= PROGRAM_STARVED_RATE;
+    }
+    return multiplier;
+  }
+
+  // Зонтики безопасности: постоянный расход влияния; кончилось — гарантии рвутся, и
+  // брошенные страны бросаются догонять бомбу.
+  private tickGuarantees(dt: number, events: SimEvent[]): void {
+    if (this.guarantees.size === 0) return;
+    const upkeep = GUARANTEE_UPKEEP * this.guarantees.size * dt;
+    if (this.influence >= upkeep) {
+      this.influence -= upkeep;
+      return;
+    }
+    this.influence = 0;
+    for (const id of [...this.guarantees]) this.breakGuarantee(id, events);
+  }
+
+  private breakGuarantee(id: FactionId, events: SimEvent[]): void {
+    this.guarantees.delete(id);
+    const program = this.programs.get(id);
+    if (program !== undefined) {
+      program.motivation = Math.min(1, program.motivation + GUARANTEE_BREAK_SPIKE);
+    }
+    events.push({ kind: 'guaranteeChanged', faction: id, active: false, broken: true });
+  }
+
+  // Соперники: держава, враждебная игроку, может взять чужую программу на содержание.
+  // Решение принимается редко (раз в пульс ИИ) и только по раскрытым для неё программам.
+  private tickSponsorship(dt: number, events: SimEvent[]): void {
+    this.sponsorAcc += dt;
+    if (this.sponsorAcc < AI_PULSE_T) return;
+    this.sponsorAcc = 0;
+    const bias = scenarioById(this.scenario).sponsorBias;
+    const player = this.playerSide;
+    if (player === undefined) return;
+
+    for (const power of NUCLEAR_POWERS) {
+      if (power.id === player) continue;
+      const eco = this.economies.get(power.id);
+      if (eco === undefined) continue;
+      const candidates = [...this.programs.values()].filter(
+        (p) => p.stage !== 'armed' && p.stage !== 'none' && !this.sponsors.has(p.id),
+      );
+      if (candidates.length === 0) continue;
+      const target = candidates[this.rng.int(candidates.length)]!;
+      const wants = wantsToSponsor({
+        hostilityToPlayer: Math.min(1, hostilityOf(this.levelBetween(power.id, player)) + bias),
+        hostilityToTarget: hostilityOf(this.levelBetween(power.id, target.id)),
+        targetProgress: totalProgress(target),
+        economy: eco.economy,
+        temperament: TEMPERAMENTS[power.id],
+        alreadySponsored: false,
+      });
+      if (!wants) continue;
+      this.sponsors.set(target.id, power.id);
+      events.push({ kind: 'sponsorChanged', target: target.id, sponsor: power.id });
+      return; // не больше одного нового спонсорства за пульс
     }
   }
 
@@ -675,18 +909,39 @@ export class Simulation {
     events.push(this.factionsEvent());
   }
 
-  // То, что игрок ЗНАЕТ о программе: до порога подозрения стадия и прогресс скрыты.
-  private programView(p: Program) {
-    const revealed = isRevealed(p);
+  // То, что игрок ЗНАЕТ о программе. Осведомлённость = max(пассивное подозрение, разведка):
+  // ниже порога стадия скрыта, а прогресс показывается с шумом — оценка, а не факт.
+  private programView(p: Program): ProgramView {
+    const intel = this.intel.get(p.id) ?? 0;
+    const knowledge = effectiveKnowledge(p.suspicion, intel);
+    const revealed = knowledge >= SUSPICION_REVEAL;
+    const sponsor = this.sponsors.get(p.id);
     return {
       id: p.id,
       revealed,
       stage: revealed ? p.stage : ('none' as const),
-      progress: revealed ? totalProgress(p) : 0,
+      progress: revealed ? noisyProgress(totalProgress(p), knowledge, p.id.length * 31) : 0,
       motivation: p.motivation,
-      suspicion: p.suspicion,
+      suspicion: knowledge,
       sanctions: p.sanctions > 0,
+      coalition: (this.coalition.get(p.id) ?? 0) > 0,
       treaty: p.treaty > 0,
+      guarantee: this.guarantees.has(p.id),
+      intel,
+      economy: this.economies.get(p.id)?.economy ?? 0,
+      sponsor: knowledge >= SPONSOR_REVEAL ? sponsor : undefined,
+    };
+  }
+
+  private campaignEvent(): SimEvent {
+    const eco = this.playerSide ? this.economies.get(this.playerSide) : undefined;
+    return {
+      kind: 'campaignChanged',
+      influence: this.influence,
+      elapsed: this.elapsed,
+      economy: eco?.economy ?? 1,
+      budget: eco?.budget ?? 0,
+      programs: [...this.programs.values()].map((p) => this.programView(p)),
     };
   }
 
@@ -749,12 +1004,84 @@ export class Simulation {
         break;
       }
     }
-    events.push({
-      kind: 'campaignChanged',
-      influence: this.influence,
-      elapsed: this.elapsed,
-      programs: [...this.programs.values()].map((p) => this.programView(p)),
+    events.push(this.campaignEvent());
+  }
+
+  // Разведка: поднимает осведомлённость по конкретной программе. Дёшево, но тает со временем —
+  // держать картину мира приходится постоянно (спека 2026-08-29-deep-simulation §6).
+  private applyRecon(target: FactionId, events: SimEvent[]): void {
+    if (!this.programs.has(target) || this.influence < COST_RECON) return;
+    this.influence -= COST_RECON;
+    const next = Math.min(1, (this.intel.get(target) ?? 0) + RECON_GAIN);
+    this.intel.set(target, next);
+    events.push({ kind: 'reconDone', faction: target, intel: next });
+    events.push(this.campaignEvent());
+  }
+
+  // Ядерный зонтик: страна под гарантией теряет мотивацию, но требует постоянного влияния.
+  private applyGuarantee(target: FactionId, events: SimEvent[]): void {
+    if (!this.programs.has(target) || this.guarantees.has(target)) return;
+    if (this.influence < COST_GUARANTEE) return;
+    this.influence -= COST_GUARANTEE;
+    this.guarantees.add(target);
+    this.toolUse.guarantees += 1;
+    events.push({ kind: 'guaranteeChanged', faction: target, active: true });
+    events.push(this.campaignEvent());
+  }
+
+  // Резолюция в совете: державы голосуют по доказательствам и своим интересам, постоянные
+  // члены могут наложить вето. Принятая резолюция — коалиционные санкции или обязательные
+  // инспекции (спека 2026-08-29-deep-simulation §3).
+  private applyResolution(target: FactionId, resolution: ResolutionKind, events: SimEvent[]): void {
+    const program = this.programs.get(target);
+    if (program === undefined || this.influence < COST_RESOLUTION) return;
+    if ((this.resolutionCooldown.get(target) ?? 0) > 0) return;
+    this.influence -= COST_RESOLUTION;
+    this.toolUse.resolutions += 1;
+    this.resolutionCooldown.set(target, RESOLUTION_COOLDOWN_T);
+
+    const proposer = this.playerSide;
+    const evidence = effectiveKnowledge(program.suspicion, this.intel.get(target) ?? 0);
+    const votes = NUCLEAR_POWERS.filter((f) => f.id !== proposer).map((f) => {
+      const ctx: VoteContext = {
+        voter: f.id,
+        temperament: TEMPERAMENTS[f.id],
+        evidence,
+        hostilityToTarget: hostilityOf(this.levelBetween(f.id, target)),
+        hostilityToProposer:
+          proposer === undefined ? 0 : hostilityOf(this.levelBetween(f.id, proposer)),
+        allyOfTarget: alliesOf(f.id).includes(target),
+        sponsorsTarget: this.sponsors.get(target) === f.id,
+        kind: resolution,
+      };
+      return voteOf(ctx);
     });
+    const outcome = resolutionOutcome(votes);
+    events.push({
+      kind: 'resolutionVoted',
+      target,
+      resolution,
+      votes,
+      passed: outcome.passed,
+      vetoedBy: outcome.vetoedBy,
+    });
+
+    if (outcome.passed) {
+      if (resolution === 'sanctions') {
+        program.sanctions = SANCTION_T;
+        this.coalition.set(target, SANCTION_T);
+        program.motivation = Math.min(1, program.motivation + 0.05);
+      } else {
+        program.suspicion = 1;
+        this.intel.set(target, 1);
+        this.revealedSeen.add(target);
+        setbackByFraction(program, 0.12);
+      }
+    } else {
+      // Провал резолюции — политическая победа цели: программа только укрепляется.
+      program.motivation = Math.min(1, program.motivation + 0.08);
+    }
+    events.push(this.campaignEvent());
   }
 
   // ---------- Слой решений (Utility AI, спека 2026-08-29-utility-ai-design.md) ----------
@@ -943,6 +1270,7 @@ export class Simulation {
     this.megatons = 0;
     this.totalDeaths = 0;
     events.push({ kind: 'planetReset' });
+    events.push(this.campaignEvent()); // новая партия — сразу отдать влияние и программы
     events.push({ kind: 'statsChanged', bombs: 0, megatons: 0, deaths: 0 });
     events.push(this.factionsEvent());
   }
@@ -1029,7 +1357,12 @@ export class Simulation {
         sanctions: this.toolUse.sanctions,
         sabotages: this.toolUse.sabotages,
         strikes: this.toolUse.strikes,
+        resolutions: this.toolUse.resolutions,
+        guarantees: this.toolUse.guarantees,
         influence: Math.round(this.influence),
+        economy: this.playerSide
+          ? Number((this.economies.get(this.playerSide)?.economy ?? 0).toFixed(2))
+          : 0,
       },
     });
   }
@@ -1121,6 +1454,12 @@ export class Simulation {
       interceptors: Object.fromEntries(this.interceptors),
       influence: Math.round(this.influence),
       elapsed: Math.round(this.elapsed),
+      scenario: this.scenario,
+      guarantees: [...this.guarantees],
+      sponsors: Object.fromEntries(this.sponsors),
+      economies: Object.fromEntries(
+        [...this.economies].map(([k, e]) => [k, Number(e.economy.toFixed(2))]),
+      ),
       programs: Object.fromEntries(
         [...this.programs].map(([k, p]) => [k, { stage: p.stage, progress: totalProgress(p) }]),
       ),

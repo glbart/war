@@ -4,7 +4,8 @@
 //
 // Запуск: npm run balance -- [партий] [доктрина] [предел секунд] [сценарий]
 //   npm run balance                      # 50 партий кампании: игрок НИЧЕГО не делает
-//   npm run balance -- 30 restrained 900 war   # партия начинается с залпа США по России
+//   npm run balance -- 30 restrained 900 war             # партия начинается с залпа по России
+//   npm run balance -- 20 escalate 900 idle coldwar      # сценарий кампании «Холодная война»
 //
 // Сценарий idle (по умолчанию) — базовая линия режима «Нераспространение»: если бездействие
 // выигрывает, играть незачем.
@@ -20,6 +21,7 @@ const GAMES = Number(process.argv[2] ?? 50);
 const DOCTRINE = process.argv[3] ?? 'restrained';
 const TIME_LIMIT = Number(process.argv[4] ?? 1200);
 const SCENARIO = process.argv[5] ?? 'idle';
+const CAMPAIGN = process.argv[6] ?? 'fragile'; // сценарий кампании: fragile | cascade | coldwar
 
 // Грузим TS-модули симуляции через vite (тот же резолвинг, что у приложения и тестов).
 const server = await createServer({
@@ -46,6 +48,7 @@ for (let seed = 1; seed <= GAMES; seed++) {
   let truces = 0;
   let done = null;
   let cmds = [
+    { kind: 'setScenario', scenario: CAMPAIGN },
     { kind: 'setDoctrine', doctrine: DOCTRINE },
     { kind: 'setSide', faction: 'usa' },
     ...(SCENARIO === 'war' ? [{ kind: 'salvo', from: 'usa', to: 'russia' }] : []),
@@ -76,7 +79,8 @@ for (let seed = 1; seed <= GAMES; seed++) {
 
 const finished = GAMES - unfinished;
 console.log(
-  `\nПартий: ${GAMES} · доктрина: ${DOCTRINE} · лимит: ${TIME_LIMIT} с · сценарий: ${SCENARIO}`,
+  `
+Партий: ${GAMES} · доктрина: ${DOCTRINE} · лимит: ${TIME_LIMIT} с · поведение: ${SCENARIO} · кампания: ${CAMPAIGN}`,
 );
 console.log('--- исходы ---');
 for (const [outcome, count] of [...outcomes].sort((a, b) => b[1] - a[1])) {

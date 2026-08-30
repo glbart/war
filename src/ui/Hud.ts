@@ -20,8 +20,13 @@ import {
   COST_SANCTIONS,
   COST_INSPECT,
   COST_SABOTAGE,
+  COST_RECON,
+  COST_GUARANTEE,
+  COST_RESOLUTION,
   CAMPAIGN_T,
 } from '../assets/config';
+import { SCENARIOS, DEFAULT_SCENARIO, type ScenarioId } from '../sim/scenarios';
+import { RESOLUTION_NAMES } from '../sim/un';
 import {
   DOCTRINES,
   DOCTRINE_NAMES,
@@ -132,6 +137,9 @@ export class Hud {
   private readonly influenceEl: HTMLElement;
   private readonly clockEl: HTMLElement;
   private readonly toolButtons: { el: HTMLButtonElement; cost: number }[] = [];
+  private readonly economyEl: HTMLElement;
+  private readonly scenarioSel: HTMLSelectElement;
+  private guaranteed = new Set<FactionId>(); // кому выдан зонтик — для переключения кнопки
 
   // Метка времени (performance.now()) последнего explosionStarted — база задержки atWaveTime
   // для последующих cityHit (тот же кадровый батч событий), чтобы города «гасли» в ленте
@@ -147,7 +155,7 @@ export class Hud {
     root.innerHTML = `
       <h1>☢ ЯДЕРНАЯ ПЕСОЧНИЦА</h1>
       <div id="shatter" style="display: none">☠ ПЛАНЕТА РАСКОЛОТА</div>
-      <div id="stats">Влияние: <b id="influence">0</b> · До конца партии: <b id="clock">10:00</b><br>Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
+      <div id="stats">Влияние: <b id="influence">0</b> · Экономика: <b id="economy">100%</b> · До конца: <b id="clock">10:00</b><br>Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
       <div id="peace-offer" style="display: none">
         <span id="peace-text"></span>
         <span class="row">
@@ -166,6 +174,12 @@ export class Hud {
         <button id="t-inspect" title="Инспекция: раскрывает стадию и прогресс">🔍 ${COST_INSPECT}</button>
         <button id="t-sabotage" title="Саботаж: откат программы, но можно провалиться">💥 ${COST_SABOTAGE}</button>
       </div>
+      <div class="row" id="tools2">
+        <button id="t-recon" title="Разведка: поднимает осведомлённость о программе">🕵 ${COST_RECON}</button>
+        <button id="t-guarantee" title="Ядерный зонтик: мотивация падает, но нужен постоянный расход влияния">☂ ${COST_GUARANTEE}</button>
+        <button id="t-res-sanctions" title="Резолюция ООН: коалиционные санкции (нужны доказательства)">🏛⛔ ${COST_RESOLUTION}</button>
+        <button id="t-res-inspect" title="Резолюция ООН: обязательные инспекции">🏛🔍 ${COST_RESOLUTION}</button>
+      </div>
       <div class="row">
         <button data-yield="1">1 Мт</button>
         <button data-yield="10">10 Мт</button>
@@ -179,6 +193,10 @@ export class Hud {
       <div class="row" id="doctrine-row">
         <span class="label">Ответный удар</span>
         <select id="doctrine" title="как стороны отвечают на удары по себе"></select>
+      </div>
+      <div class="row" id="scenario-row">
+        <span class="label">Сценарий</span>
+        <select id="scenario" title="стартовые условия партии (перезапускает партию)"></select>
       </div>
       <div class="row">
         <button id="salvo">☢ Залп МБР</button>
@@ -212,6 +230,9 @@ export class Hud {
     this.overBodyEl = body;
     this.whyEl = root.querySelector<HTMLElement>('#why')!;
     this.influenceEl = root.querySelector<HTMLElement>('#influence')!;
+    this.economyEl = root.querySelector<HTMLElement>('#economy')!;
+    this.scenarioSel = root.querySelector<HTMLSelectElement>('#scenario')!;
+    this.buildScenarioSelect();
     this.clockEl = root.querySelector<HTMLElement>('#clock')!;
     this.buildProgramRows(root.querySelector<HTMLElement>('#programs')!);
     this.bindTools(root);
@@ -340,7 +361,7 @@ export class Hud {
     const bind = (
       id: string,
       cost: number,
-      kind: 'offerTreaty' | 'imposeSanctions' | 'inspect' | 'sabotage',
+      kind: 'offerTreaty' | 'imposeSanctions' | 'inspect' | 'sabotage' | 'recon',
     ) => {
       const el = root.querySelector<HTMLButtonElement>(id)!;
       el.addEventListener('click', () => {
@@ -353,7 +374,46 @@ export class Hud {
     bind('#t-sanctions', COST_SANCTIONS, 'imposeSanctions');
     bind('#t-inspect', COST_INSPECT, 'inspect');
     bind('#t-sabotage', COST_SABOTAGE, 'sabotage');
+    bind('#t-recon', COST_RECON, 'recon');
+
+    // Зонтик — переключатель: выдать или снять с выбранной страны.
+    const guaranteeBtn = root.querySelector<HTMLButtonElement>('#t-guarantee')!;
+    guaranteeBtn.addEventListener('click', () => {
+      const target = this.programTarget;
+      if (target === undefined) return;
+      this.host.post({
+        kind: this.guaranteed.has(target) ? 'revokeGuarantee' : 'offerGuarantee',
+        target,
+      });
+    });
+    this.toolButtons.push({ el: guaranteeBtn, cost: COST_GUARANTEE });
+
+    const resolution = (id: string, kind: 'sanctions' | 'inspections') => {
+      const el = root.querySelector<HTMLButtonElement>(id)!;
+      el.addEventListener('click', () => {
+        if (this.programTarget === undefined) return;
+        this.host.post({ kind: 'proposeResolution', target: this.programTarget, resolution: kind });
+      });
+      this.toolButtons.push({ el, cost: COST_RESOLUTION });
+    };
+    resolution('#t-res-sanctions', 'sanctions');
+    resolution('#t-res-inspect', 'inspections');
     this.updateTools();
+  }
+
+  // Сценарий партии: выбор перезапускает кампанию (симуляция сама делает reset).
+  private buildScenarioSelect(): void {
+    for (const sc of SCENARIOS) {
+      const opt = document.createElement('option');
+      opt.value = sc.id;
+      opt.textContent = sc.name;
+      opt.title = sc.hint;
+      this.scenarioSel.append(opt);
+    }
+    this.scenarioSel.value = DEFAULT_SCENARIO;
+    this.scenarioSel.addEventListener('change', () =>
+      this.host.post({ kind: 'setScenario', scenario: this.scenarioSel.value as ScenarioId }),
+    );
   }
 
   private selectProgram(id: FactionId): void {
@@ -372,10 +432,17 @@ export class Hud {
   }
 
   // Секундный снимок кампании: влияние, часы партии и состояние всех программ.
-  private updateCampaign(influence: number, elapsed: number, programs: ProgramView[]): void {
+  private updateCampaign(
+    influence: number,
+    elapsed: number,
+    economy: number,
+    programs: ProgramView[],
+  ): void {
     this.influence = influence;
     const rounded = String(Math.floor(influence));
     if (this.influenceEl.textContent !== rounded) this.influenceEl.textContent = rounded;
+    const eco = `${Math.round(economy * 100)}%`;
+    if (this.economyEl.textContent !== eco) this.economyEl.textContent = eco;
     const left = Math.max(0, CAMPAIGN_T - elapsed);
     const clock = `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`;
     if (this.clockEl.textContent !== clock) this.clockEl.textContent = clock;
@@ -388,8 +455,19 @@ export class Hud {
       row.stage.classList.toggle('unknown', !p.revealed);
       (row.bar.style as CSSStyleDeclaration).width = `${Math.round(p.progress * 100)}%`;
       row.bar.classList.toggle('armed', p.stage === 'armed');
-      const marks = (p.treaty ? '☮' : '') + (p.sanctions ? '⛔' : '');
+      const marks =
+        (p.treaty ? '☮' : '') +
+        (p.sanctions ? (p.coalition ? '⛔⛔' : '⛔') : '') +
+        (p.guarantee ? '☂' : '') +
+        (p.sponsor ? '⚑' : '');
       if (row.marks.textContent !== marks) row.marks.textContent = marks;
+      row.marks.title = p.sponsor ? `Спонсор программы: ${factionById(p.sponsor).name}` : '';
+      // Осведомлённость: подпись к стадии показывает, насколько данным можно верить.
+      row.stage.title = `Осведомлённость: ${Math.round(p.suspicion * 100)}% · экономика ${Math.round(
+        p.economy * 100,
+      )}%`;
+      if (p.guarantee) this.guaranteed.add(p.id);
+      else this.guaranteed.delete(p.id);
     }
     this.updateTools();
   }
@@ -585,7 +663,50 @@ export class Hud {
         if (this.whyFor === e.faction) this.renderWhy();
         break;
       case 'campaignChanged':
-        this.updateCampaign(e.influence, e.elapsed, e.programs);
+        this.updateCampaign(e.influence, e.elapsed, e.economy, e.programs);
+        break;
+      case 'guaranteeChanged':
+        this.pushLine(
+          `☂ ${factionById(e.faction).name}: ${
+            e.active
+              ? 'под ядерным зонтиком'
+              : e.broken
+                ? 'зонтик сорван — влияния не хватило'
+                : 'зонтик снят'
+          }`,
+          e.active ? 'peace' : 'prog',
+        );
+        break;
+      case 'reconDone':
+        this.pushLine(
+          `🕵 Разведка ${factionById(e.faction).name}: осведомлённость ${Math.round(e.intel * 100)}%`,
+          'prog',
+        );
+        break;
+      case 'resolutionVoted': {
+        const forCount = e.votes.filter((v) => v.vote === 'for').length;
+        const against = e.votes.filter((v) => v.vote === 'against').length;
+        const verdict = e.passed
+          ? 'принята'
+          : e.vetoedBy
+            ? `вето: ${factionById(e.vetoedBy).name}`
+            : 'отклонена';
+        this.pushLine(
+          `🏛 ${RESOLUTION_NAMES[e.resolution]} против ${factionById(e.target).name}: ${verdict} (${forCount}/${against})`,
+          e.passed ? 'peace' : 'prog',
+        );
+        break;
+      }
+      case 'sponsorChanged':
+        this.pushLine(
+          e.sponsor
+            ? `⚑ ${factionById(e.sponsor).name} спонсирует программу: ${factionById(e.target).name}`
+            : `⚑ ${factionById(e.target).name} осталась без спонсора`,
+          'war',
+        );
+        break;
+      case 'scenarioChanged':
+        this.scenarioSel.value = e.scenario;
         break;
       case 'programRevealed':
         this.pushLine(
@@ -746,8 +867,9 @@ export class Hud {
         Партия: ${Math.floor(campaign.elapsed / 60)} мин ${Math.floor(campaign.elapsed % 60)} с ·
         бомбу получили: <b>${armedNames}</b> · программ остановлено: <b>${campaign.stopped}</b><br>
         договоров ${campaign.treaties} · санкций ${campaign.sanctions} ·
-        саботажей ${campaign.sabotages} · ударов по программам ${campaign.strikes} ·
-        влияния осталось ${campaign.influence}
+        резолюций ${campaign.resolutions} · зонтиков ${campaign.guarantees} ·
+        саботажей ${campaign.sabotages} · ударов по программам ${campaign.strikes}<br>
+        влияния осталось ${campaign.influence} · экономика ${Math.round(campaign.economy * 100)}%
       </div>
       <table>
         <tr><th>Сторона</th><th>Выжило</th><th>Потери</th><th>Убито</th><th>Пусков</th><th>Сбито</th><th>☢</th></tr>

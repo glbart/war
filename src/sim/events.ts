@@ -5,6 +5,8 @@ import type { Doctrine } from './diplomacy';
 import type { Outcome } from './victory';
 import type { ActionId, Candidate } from './ai/types';
 import type { ProgramStage } from './proliferation';
+import type { ResolutionKind, VoteResult } from './un';
+import type { ScenarioId } from './scenarios';
 
 // Что игрок знает о чужой программе: пока подозрение ниже порога, стадия и прогресс скрыты.
 export type ProgramView = {
@@ -15,7 +17,12 @@ export type ProgramView = {
   motivation: number;
   suspicion: number;
   sanctions: boolean;
+  coalition: boolean; // санкции коалиционные (вдвое больнее)
   treaty: boolean;
+  guarantee: boolean; // страна под зонтиком игрока
+  intel: number; // осведомлённость игрока 0..1
+  economy: number; // индекс экономики страны (виден при достаточной разведке)
+  sponsor?: FactionId; // кто кормит программу (виден только при высокой осведомлённости)
 };
 
 // Сводка кампании для экрана итогов.
@@ -27,7 +34,10 @@ export type CampaignSummary = {
   sanctions: number;
   sabotages: number;
   strikes: number; // ударов по программам
+  resolutions: number; // внесено резолюций
+  guarantees: number; // выдано гарантий
   influence: number;
+  economy: number; // экономика игрока к концу партии
 };
 
 // Изменяемое состояние стороны для HUD (статику — название/цвет/исходное население — HUD
@@ -122,7 +132,26 @@ export type SimEvent =
       campaign: CampaignSummary;
     }
   // Раз в секунду: состояние кампании и всех программ (то, что известно игроку).
-  | { kind: 'campaignChanged'; influence: number; elapsed: number; programs: ProgramView[] }
+  | {
+      kind: 'campaignChanged';
+      influence: number;
+      elapsed: number;
+      economy: number; // экономика стороны игрока — от неё зависит приток влияния
+      budget: number;
+      programs: ProgramView[];
+    }
+  | { kind: 'guaranteeChanged'; faction: FactionId; active: boolean; broken?: boolean }
+  | { kind: 'reconDone'; faction: FactionId; intel: number }
+  | {
+      kind: 'resolutionVoted';
+      target: FactionId;
+      resolution: ResolutionKind;
+      votes: VoteResult[];
+      passed: boolean;
+      vetoedBy?: FactionId;
+    }
+  | { kind: 'sponsorChanged'; target: FactionId; sponsor?: FactionId }
+  | { kind: 'scenarioChanged'; scenario: ScenarioId }
   | { kind: 'programRevealed'; faction: FactionId; stage: ProgramStage }
   | { kind: 'nuclearTest'; faction: FactionId } // страна провела испытание и стала державой
   | { kind: 'treatyAnswer'; faction: FactionId; accepted: boolean }
