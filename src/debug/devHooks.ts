@@ -40,6 +40,13 @@ export function installHudHook(hud: { onEvent: (e: SimEvent) => void }): void {
   w.__hud = (event: SimEvent) => hud.onEvent(event);
 }
 
+// __map — плоская карта: headless-приёмке нужно находить страну под точкой экрана, чтобы
+// проверять выбор страны кликом. Только dev-сборка, как и остальные хуки.
+export function installMapHook(map: unknown): void {
+  const w = window as unknown as Record<string, unknown>;
+  w.__map = map;
+}
+
 // __waterStats() — readback поля воды (min/max высоты R и скорости G): прямой факт «есть ли
 // энергия в поле» без интерпретации через шейдинг. Ставится отдельным вызовом, потому что
 // Scene создаётся в main.ts ПОЗЖЕ installDevHooks (ей нужны globe и damageField).

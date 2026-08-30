@@ -101,6 +101,12 @@ export class Hud {
   private lastShattered = false; // кэш баннера раскола — DOM только при смене
   private readonly feedEl: HTMLElement;
   private readonly labelsBtn: HTMLButtonElement;
+  private readonly mapBtn: HTMLButtonElement;
+  // Переключение вида «глобус ↔ плоская карта» живёт в main.ts (это клиентское состояние
+  // рендера, симуляции о нём знать не нужно) — HUD только даёт кнопку.
+  onToggleMap: (() => void) | undefined;
+  // Выбор цели инструментов сменился — карта подсвечивает территорию этой стороны.
+  onProgramSelect: ((id: FactionId | undefined) => void) | undefined;
   private readonly yieldButtons: HTMLButtonElement[];
   // Панель сторон (спека 2026-08-29): строка на фракцию, DOM трогаем только при смене текста.
   private readonly factionRows = new Map<
@@ -203,8 +209,9 @@ export class Hud {
         <button id="truce">☮ Перемирие</button>
       </div>
       <button id="reset">Восстановить планету</button>
+      <button id="map" style="width: 100%; margin-top: 8px">🗺 Плоская карта (M)</button>
       <button id="labels" class="active" style="width: 100%; margin-top: 8px">Границы и названия: вкл</button>
-      <p id="hint">Крути планету мышью · колесо — зум<br>Клик по планете — удар выбранной стороны</p>
+      <p id="hint">Крути планету мышью · колесо — зум · «M» — плоская карта<br>Клик — удар выбранной стороны · Shift+клик на карте — выбрать страну</p>
       <p id="credit">Границы и названия: Esri</p>
     `;
     document.body.appendChild(root);
@@ -216,6 +223,8 @@ export class Hud {
     this.shatterEl = root.querySelector<HTMLElement>('#shatter')!;
     this.feedEl = root.querySelector<HTMLElement>('#feed')!;
     this.labelsBtn = root.querySelector<HTMLButtonElement>('#labels')!;
+    this.mapBtn = root.querySelector<HTMLButtonElement>('#map')!;
+    this.mapBtn.addEventListener('click', () => this.onToggleMap?.());
     const resetBtn = root.querySelector<HTMLButtonElement>('#reset')!;
     this.yieldButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('button[data-yield]'));
     this.attackerSel = root.querySelector<HTMLSelectElement>('#attacker')!;
@@ -416,8 +425,15 @@ export class Hud {
     );
   }
 
+  // Выбор цели снаружи (например, кликом по стране на карте).
+  selectProgramExternal(id: FactionId | undefined): void {
+    if (id === undefined || !this.programRows.has(id)) return;
+    if (this.programTarget !== id) this.selectProgram(id);
+  }
+
   private selectProgram(id: FactionId): void {
     this.programTarget = this.programTarget === id ? undefined : id;
+    this.onProgramSelect?.(this.programTarget);
     for (const [rowId, row] of this.programRows) {
       row.row.classList.toggle('selected', rowId === this.programTarget);
     }
@@ -566,6 +582,12 @@ export class Hud {
       if (factionById(s.id).aspirant) row.row.hidden = s.arsenal === 0 && s.enemies.length === 0;
     }
     this.updateSalvoButton();
+  }
+
+  // Подсветка кнопки вида: показывает, в каком режиме мы сейчас.
+  setMapMode(on: boolean): void {
+    this.mapBtn.classList.toggle('active', on);
+    this.mapBtn.textContent = on ? '🌍 Глобус (M)' : '🗺 Плоская карта (M)';
   }
 
   // Текущая выбранная мощность заряда — читается main.ts при клике по глобусу.
