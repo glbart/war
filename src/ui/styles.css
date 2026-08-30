@@ -305,8 +305,17 @@
 #programs .p-bar i.armed {
   background: #ff5544;
 }
-#tools button {
+#tools button,
+#tools2 button {
   font-size: 12px;
+}
+#scenario-row {
+  align-items: center;
+  font-size: 11px;
+}
+#scenario-row .label {
+  color: #7d93b8;
+  flex: none;
 }
 #feed div.prog {
   color: #d7c07a;

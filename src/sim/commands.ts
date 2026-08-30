@@ -1,6 +1,8 @@
 import type { Vec3 } from './geo';
 import type { FactionId } from './factions';
 import type { Doctrine } from './diplomacy';
+import type { ResolutionKind } from './un';
+import type { ScenarioId } from './scenarios';
 
 // Команды, которыми внешний слой (ввод/сеть) управляет симуляцией.
 export type Command =
@@ -24,5 +26,12 @@ export type Command =
   | { kind: 'imposeSanctions'; target: FactionId }
   | { kind: 'inspect'; target: FactionId }
   | { kind: 'sabotage'; target: FactionId }
+  // Глубокая симуляция (спека 2026-08-29-deep-simulation): зонтик, разведка, резолюции ООН,
+  // выбор сценария кампании.
+  | { kind: 'offerGuarantee'; target: FactionId }
+  | { kind: 'revokeGuarantee'; target: FactionId }
+  | { kind: 'recon'; target: FactionId }
+  | { kind: 'proposeResolution'; target: FactionId; resolution: ResolutionKind }
+  | { kind: 'setScenario'; scenario: ScenarioId }
   | { kind: 'reset' }
   | { kind: 'toggleLabels' };

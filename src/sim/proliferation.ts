@@ -89,13 +89,15 @@ export function totalProgress(p: Program): number {
 }
 
 // Продвигает программу на dt секунд: прогресс, переход стадий, рост подозрения.
+// rateMultiplier — внешние множители темпа: спонсорские деньги ускоряют, нехватка бюджета
+// тормозит (спека 2026-08-29-deep-simulation §2, §5).
 // Возвращает true, если страна ПРОВЕЛА ИСПЫТАНИЕ на этом шаге (стала ядерной державой).
-export function advanceProgram(p: Program, dt: number): boolean {
+export function advanceProgram(p: Program, dt: number, rateMultiplier = 1): boolean {
   p.sanctions = Math.max(0, p.sanctions - dt);
   p.treaty = Math.max(0, p.treaty - dt);
   if (p.stage === 'armed') return false;
 
-  const rate = programRate(p);
+  const rate = programRate(p) * Math.max(0, rateMultiplier);
   if (rate > 0 && p.stage === 'none') p.stage = 'research';
   p.progress += rate * dt;
   while (p.progress >= 1 && p.stage !== 'armed') {

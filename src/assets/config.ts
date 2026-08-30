@@ -302,3 +302,35 @@ export const SUSPICION_REVEAL = 0.5; // выше этого порога про�
 export const CASCADE_MOTIVATION = 0.15; // чужое испытание подстёгивает всех остальных
 export const NEW_POWER_ARSENAL = 4; // боеголовок у страны, дошедшей до испытания
 export const NEW_POWER_INTERCEPTORS = 2;
+
+// ---------- Глубокая симуляция (спека 2026-08-29-deep-simulation-design.md) ----------
+// Экономика: индекс 0..1 даёт доход, доход копится в бюджет, бюджет кормит программу.
+export const ECONOMY_INCOME = 2.0; // единиц бюджета в секунду при индексе 1
+export const ECONOMY_RECOVERY = 0.02; // скорость возврата индекса к его потолку
+export const SANCTION_ECONOMY_HIT = 0.012; // падение индекса в секунду под санкциями
+export const SANCTION_SELF_COST = 0.004; // и сам инициатор платит за каждую активную санкцию
+// Стоимость работ подобрана по доходу: средняя экономика (индекс ~0.3) тянет программу,
+// но санкции роняют индекс ниже линии финансирования — и работы начинают глохнуть сами.
+export const PROGRAM_COST_RATE = 0.5;
+export const PROGRAM_STARVED_RATE = 0.25; // множитель скорости, когда денег нет
+// ООН: резолюции и голосование ядерных держав.
+export const COST_RESOLUTION = 10;
+export const UN_SUPPORT_FOR = 0.55; // выше — голос «за»
+export const UN_SUPPORT_AGAINST = 0.35; // ниже — голос «против»
+export const COALITION_SANCTION_FACTOR = 2; // коалиционные санкции бьют вдвое сильнее
+export const RESOLUTION_COOLDOWN_T = 45; // сек между резолюциями по одной цели
+// Гарантии безопасности.
+export const COST_GUARANTEE = 20; // разовая цена оформления зонтика
+export const GUARANTEE_UPKEEP = 0.5; // влияния в секунду за каждый действующий зонтик
+export const GUARANTEE_MOTIVATION_FLOOR = 0.12; // к чему тянется мотивация под зонтиком
+export const GUARANTEE_BREAK_SPIKE = 0.25; // брошенный союзник бежит за бомбой
+// Шпионаж.
+export const COST_RECON = 6;
+export const RECON_GAIN = 0.4;
+export const INTEL_DECAY = 0.004; // в секунду
+export const SPONSOR_REVEAL = 0.6; // с какого уровня осведомлённости видно спонсора
+export const PROGRESS_NOISE_SCALE = 0.25; // максимум шума в показанном прогрессе
+// Спонсорство чужих программ соперниками игрока.
+export const SPONSOR_SPEEDUP = 1.6;
+export const SPONSOR_MONEY_RATE = 1.6; // спонсор оплачивает работы подопечного
+export const SPONSOR_MIN_DESIRE = 0.45; // ниже этого держава не станет спонсировать
