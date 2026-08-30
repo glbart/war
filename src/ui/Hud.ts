@@ -1,9 +1,12 @@
-// HUD: панель счётчиков (бомбы/мегатонны/жертвы), лента поражённых городов, кнопки мощности
-// заряда, «Восстановить планету», «Границы и названия». Порт разметки/логики
-// reference/earth-nuke.html ~44-57 (#ui), ~1000-1045 (updateStats/addFeedEntry/обработчики
-// кнопок), fmtPeople ~447-449. Единственный потребитель SimHost.post() со стороны кнопок;
-// onEvent() — единственный вход для событий симуляции (main.ts раздаёт их из того же
-// кадрового батча drainEvents(), которым уже пользуется Scene).
+// HUD: панель управления партией. С версии 0.16 разбита на именованные секции (спека
+// 2026-08-30-onboarding-ui-design §3.4): шапка «за кого играем», цель партии с таймером,
+// ядерные программы с инструментами влияния, хроника, а редкое (стороны мира, военные
+// действия, вид) свёрнуто. Сторона игрока сюда приходит из стартового меню (setSide) —
+// прежнего селекта «кто бьёт» больше нет.
+//
+// Единственный потребитель SimHost.post() со стороны кнопок; onEvent() — единственный вход
+// для событий симуляции (main.ts раздаёт их из того же кадрового батча drainEvents(),
+// которым уже пользуется Scene).
 import './styles.css';
 import type { SimHost } from '../sim/SimHost';
 import type {
@@ -13,18 +16,10 @@ import type {
   ProgramView,
   CampaignSummary,
 } from '../sim/events';
-import { FACTIONS, BELLIGERENTS, ASPIRANTS, factionById, type FactionId } from '../sim/factions';
+import { FACTIONS, ASPIRANTS, factionById, type FactionId } from '../sim/factions';
 import { STAGE_NAMES } from '../sim/proliferation';
-import {
-  COST_TREATY,
-  COST_SANCTIONS,
-  COST_INSPECT,
-  COST_SABOTAGE,
-  COST_RECON,
-  COST_GUARANTEE,
-  COST_RESOLUTION,
-  CAMPAIGN_T,
-} from '../assets/config';
+import { CAMPAIGN_T, PROLIF_LOSS_COUNT } from '../assets/config';
+import { TOOL_BRIEFS, type ToolBrief, type ToolId } from '../assets/briefing';
 import { SCENARIOS, DEFAULT_SCENARIO, type ScenarioId } from '../sim/scenarios';
 import { RESOLUTION_NAMES } from '../sim/un';
 import {
@@ -37,6 +32,10 @@ import {
 import { OUTCOME_TITLES, type Outcome } from '../sim/victory';
 import { ACTION_NAMES, type ActionId, type Candidate } from '../sim/ai/types';
 import { createCities } from '../sim/cities';
+
+// Ключ localStorage для состояния раскрытия секций: раскрыл один раз — так и осталось
+// (спека §6: сворачивание не должно прятать функции навсегда).
+const SECTIONS_KEY = 'hud-sections-v1';
 
 const DEFAULT_YIELD = 100;
 // 7 (было 5): в ленте теперь два потока — погибшие города и пуски ответных ударов.
@@ -114,7 +113,6 @@ export class Hud {
     { pop: HTMLElement; ars: HTMLElement; war: HTMLElement; row: HTMLElement }
   >();
   private readonly factionTotals = totalPops();
-  private readonly attackerSel: HTMLSelectElement;
   private readonly targetSel: HTMLSelectElement;
   private readonly salvoBtn: HTMLButtonElement;
   private readonly doctrineSel: HTMLSelectElement; // режим ответных ударов (спека 2026-08-29)
@@ -142,10 +140,21 @@ export class Hud {
   private influence = 0;
   private readonly influenceEl: HTMLElement;
   private readonly clockEl: HTMLElement;
-  private readonly toolButtons: { el: HTMLButtonElement; cost: number }[] = [];
+  // Кнопки инструментов: помним бриф целиком — из него собираются подпись, цена и тултип,
+  // объясняющий, почему кнопка серая (спека 2026-08-30 §3.4).
+  private readonly toolButtons: { el: HTMLButtonElement; brief: ToolBrief }[] = [];
+  private readonly toolHintEl: HTMLElement; // строка «почему инструменты недоступны»
   private readonly economyEl: HTMLElement;
   private readonly scenarioSel: HTMLSelectElement;
   private guaranteed = new Set<FactionId>(); // кому выдан зонтик — для переключения кнопки
+  // Сторона игрока приходит из стартового меню (setSide) и дальше не меняется в течение
+  // партии: ей приписываются ручные удары и залпы, ей адресуют предложения мира.
+  private side: FactionId | undefined;
+  private readonly sideNameEl: HTMLElement;
+  private readonly sideDotEl: HTMLElement;
+  // Пауза и справка — клиентские экраны, их владелец main.ts; HUD только даёт кнопки.
+  onPause: (() => void) | undefined;
+  onHelp: (() => void) | undefined;
 
   // Метка времени (performance.now()) последнего explosionStarted — база задержки atWaveTime
   // для последующих cityHit (тот же кадровый батч событий), чтобы города «гасли» в ленте
@@ -159,9 +168,21 @@ export class Hud {
     const root = document.createElement('div');
     root.id = 'ui';
     root.innerHTML = `
-      <h1>☢ ЯДЕРНАЯ ПЕСОЧНИЦА</h1>
+      <div id="hud-head">
+        <span id="side-badge" title="Сторона, за которую вы играете. Сменить — в меню (Esc)">
+          <i id="side-dot"></i><b id="side-name">—</b>
+        </span>
+        <span id="head-btns">
+          <button id="pause" title="Пауза и меню (Esc)">⏸</button>
+          <button id="help" title="Как играть (H)">?</button>
+        </span>
+      </div>
+      <div id="goal">
+        <div class="goal-line">Не дать никому получить бомбу · осталось <b id="clock">10:00</b></div>
+        <div class="goal-line">Влияние <b id="influence">0</b> · экономика <b id="economy">100%</b>
+          · проигрыш при <b>${PROLIF_LOSS_COUNT}</b> новых державах</div>
+      </div>
       <div id="shatter" style="display: none">☠ ПЛАНЕТА РАСКОЛОТА</div>
-      <div id="stats">Влияние: <b id="influence">0</b> · Экономика: <b id="economy">100%</b> · До конца: <b id="clock">10:00</b><br>Бомб сброшено: <b id="bombs">0</b><br>Суммарно: <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b><br>Целостность коры: <b id="integrity">100%</b></div>
       <div id="peace-offer" style="display: none">
         <span id="peace-text"></span>
         <span class="row">
@@ -169,49 +190,59 @@ export class Hud {
           <button id="peace-no">Отклонить</button>
         </span>
       </div>
-      <div id="feed"></div>
-      <div id="factions"></div>
-      <div id="why" style="display: none"></div>
-      <div id="programs-title">Ядерные программы</div>
-      <div id="programs"></div>
-      <div class="row" id="tools">
-        <button id="t-treaty" title="Договор: страна может заморозить программу">☮ ${COST_TREATY}</button>
-        <button id="t-sanctions" title="Санкции: программа идёт втрое медленнее">⛔ ${COST_SANCTIONS}</button>
-        <button id="t-inspect" title="Инспекция: раскрывает стадию и прогресс">🔍 ${COST_INSPECT}</button>
-        <button id="t-sabotage" title="Саботаж: откат программы, но можно провалиться">💥 ${COST_SABOTAGE}</button>
-      </div>
-      <div class="row" id="tools2">
-        <button id="t-recon" title="Разведка: поднимает осведомлённость о программе">🕵 ${COST_RECON}</button>
-        <button id="t-guarantee" title="Ядерный зонтик: мотивация падает, но нужен постоянный расход влияния">☂ ${COST_GUARANTEE}</button>
-        <button id="t-res-sanctions" title="Резолюция ООН: коалиционные санкции (нужны доказательства)">🏛⛔ ${COST_RESOLUTION}</button>
-        <button id="t-res-inspect" title="Резолюция ООН: обязательные инспекции">🏛🔍 ${COST_RESOLUTION}</button>
-      </div>
-      <div class="row">
-        <button data-yield="1">1 Мт</button>
-        <button data-yield="10">10 Мт</button>
-        <button data-yield="100" class="active">100 Мт</button>
-      </div>
-      <div class="row" id="salvo-sides">
-        <select id="attacker" title="за кого играем: этой стороне приписываются и клик, и залп"></select>
-        <span class="arrow">→</span>
-        <select id="target" title="по кому удар"></select>
-      </div>
-      <div class="row" id="doctrine-row">
-        <span class="label">Ответный удар</span>
-        <select id="doctrine" title="как стороны отвечают на удары по себе"></select>
-      </div>
-      <div class="row" id="scenario-row">
-        <span class="label">Сценарий</span>
-        <select id="scenario" title="стартовые условия партии (перезапускает партию)"></select>
-      </div>
-      <div class="row">
-        <button id="salvo">☢ Залп МБР</button>
-        <button id="truce">☮ Перемирие</button>
-      </div>
-      <button id="reset">Восстановить планету</button>
-      <button id="map" style="width: 100%; margin-top: 8px">🗺 Плоская карта (M)</button>
-      <button id="labels" class="active" style="width: 100%; margin-top: 8px">Границы и названия: вкл</button>
-      <p id="hint">Крути планету мышью · колесо — зум · «M» — плоская карта<br>Клик — удар выбранной стороны · Shift+клик на карте — выбрать страну</p>
+
+      <details class="sec" data-sec="programs" open>
+        <summary>Ядерные программы</summary>
+        <div id="programs"></div>
+        <div id="tool-hint"></div>
+        <div id="tools"></div>
+      </details>
+
+      <details class="sec" data-sec="feed" open>
+        <summary>Хроника</summary>
+        <div id="feed"></div>
+      </details>
+
+      <details class="sec" data-sec="factions">
+        <summary>Стороны мира</summary>
+        <div id="factions"></div>
+        <div id="why" style="display: none"></div>
+      </details>
+
+      <details class="sec" data-sec="war">
+        <summary>Военные действия</summary>
+        <div id="stats">Бомб сброшено: <b id="bombs">0</b> · суммарно <b id="megatons">0</b> Мт<br>Жертвы: <b id="deaths">0</b> · целостность коры <b id="integrity">100%</b></div>
+        <div class="row" id="yield-row">
+          <button data-yield="1">1 Мт</button>
+          <button data-yield="10">10 Мт</button>
+          <button data-yield="100" class="active">100 Мт</button>
+        </div>
+        <div class="row" id="salvo-sides">
+          <span class="label">Удар по</span>
+          <select id="target" title="по кому бьёт залп и кому предлагается перемирие"></select>
+        </div>
+        <div class="row" id="doctrine-row">
+          <span class="label">Ответный удар</span>
+          <select id="doctrine" title="как стороны отвечают на удары по себе"></select>
+        </div>
+        <div class="row">
+          <button id="salvo">☢ Залп МБР</button>
+          <button id="truce">☮ Перемирие</button>
+        </div>
+      </details>
+
+      <details class="sec" data-sec="view">
+        <summary>Вид и партия</summary>
+        <div class="row" id="scenario-row">
+          <span class="label">Сценарий</span>
+          <select id="scenario" title="стартовые условия партии (перезапускает партию)"></select>
+        </div>
+        <button id="map">🗺 Плоская карта (M)</button>
+        <button id="labels" class="active">Границы и названия: вкл</button>
+        <button id="reset">↻ Начать партию заново</button>
+      </details>
+
+      <p id="hint">Мышь — вращать планету · колесо — зум · <b>M</b> — плоская карта<br>Клик по планете — ядерный удар от вашего имени · <b>Esc</b> — меню · <b>H</b> — справка</p>
       <p id="credit">Границы и названия: Esri</p>
     `;
     document.body.appendChild(root);
@@ -227,7 +258,6 @@ export class Hud {
     this.mapBtn.addEventListener('click', () => this.onToggleMap?.());
     const resetBtn = root.querySelector<HTMLButtonElement>('#reset')!;
     this.yieldButtons = Array.from(root.querySelectorAll<HTMLButtonElement>('button[data-yield]'));
-    this.attackerSel = root.querySelector<HTMLSelectElement>('#attacker')!;
     this.targetSel = root.querySelector<HTMLSelectElement>('#target')!;
     this.salvoBtn = root.querySelector<HTMLButtonElement>('#salvo')!;
     this.doctrineSel = root.querySelector<HTMLSelectElement>('#doctrine')!;
@@ -238,6 +268,16 @@ export class Hud {
     this.overEl = overlay;
     this.overBodyEl = body;
     this.whyEl = root.querySelector<HTMLElement>('#why')!;
+    this.sideNameEl = root.querySelector<HTMLElement>('#side-name')!;
+    this.sideDotEl = root.querySelector<HTMLElement>('#side-dot')!;
+    this.toolHintEl = root.querySelector<HTMLElement>('#tool-hint')!;
+    root
+      .querySelector<HTMLButtonElement>('#pause')!
+      .addEventListener('click', () => this.onPause?.());
+    root
+      .querySelector<HTMLButtonElement>('#help')!
+      .addEventListener('click', () => this.onHelp?.());
+    this.restoreSections(root);
     this.influenceEl = root.querySelector<HTMLElement>('#influence')!;
     this.economyEl = root.querySelector<HTMLElement>('#economy')!;
     this.scenarioSel = root.querySelector<HTMLSelectElement>('#scenario')!;
@@ -253,25 +293,19 @@ export class Hud {
       btn.addEventListener('click', () => this.selectYield(btn));
     }
     resetBtn.addEventListener('click', () => this.host.post({ kind: 'reset' }));
-    // Залп МБР: сторона-агрессор бьёт по стороне-цели (пусто в селекте = «случайно» —
+    // Залп МБР: бьёт сторона игрока по стороне-цели (пусто в селекте = «случайно» —
     // выбор и детерминизм остаются за симуляцией, см. Simulation.applySalvo).
     this.salvoBtn.addEventListener('click', () => {
-      const from = this.attackerSel.value as FactionId | typeof ANY;
       const to = this.targetSel.value as FactionId | typeof ANY;
       this.host.post({
         kind: 'salvo',
-        from: from === ANY ? undefined : from,
+        from: this.side,
         to: to === ANY ? undefined : to,
       });
     });
-    // Смена агрессора может сделать залп невозможным (нет боеголовок/городов) — кнопка
-    // гаснет сразу, не дожидаясь следующего события симуляции.
-    this.attackerSel.addEventListener('change', () => this.updateSalvoButton());
+    // Смена цели может сделать залп или перемирие невозможными — кнопки гаснут сразу,
+    // не дожидаясь следующего события симуляции.
     this.targetSel.addEventListener('change', () => this.updateSalvoButton());
-    // Сторона игрока: симуляция должна знать её, чтобы адресовать игроку предложения мира.
-    this.attackerSel.addEventListener('change', () =>
-      this.host.post({ kind: 'setSide', faction: this.currentSide }),
-    );
     // Предложить перемирие стороне из правого селекта (кому — та же цель, что и для залпа).
     this.truceBtn.addEventListener('click', () => {
       const from = this.currentSide;
@@ -321,8 +355,8 @@ export class Hud {
     }
   }
 
-  // Селекты сторон: агрессор — только воюющие стороны, цель — любая (нейтральных тоже
-  // можно бомбить). Первый пункт обоих — «случайно» (симуляция выберет сама).
+  // Селект цели: бить можно по любой стороне (нейтральных тоже). Первый пункт — «случайно»
+  // (сторону выберет симуляция). Агрессор больше не выбирается: это всегда сторона игрока.
   private buildSideSelects(): void {
     const fill = (sel: HTMLSelectElement, list: readonly { id: FactionId; name: string }[]) => {
       const any = document.createElement('option');
@@ -336,7 +370,6 @@ export class Hud {
         sel.append(opt);
       }
     };
-    fill(this.attackerSel, BELLIGERENTS);
     fill(this.targetSel, FACTIONS);
   }
 
@@ -366,48 +399,56 @@ export class Hud {
     }
   }
 
+  // Кнопки инструментов строятся из данных TOOL_BRIEFS: у каждой видимая подпись и цена,
+  // а не голая иконка (спека 2026-08-30 §3.4, пункт 4 разбора). Тултип собирается там же —
+  // «что делает» и «когда применять».
   private bindTools(root: HTMLElement): void {
-    const bind = (
-      id: string,
-      cost: number,
-      kind: 'offerTreaty' | 'imposeSanctions' | 'inspect' | 'sabotage' | 'recon',
-    ) => {
-      const el = root.querySelector<HTMLButtonElement>(id)!;
-      el.addEventListener('click', () => {
-        if (this.programTarget === undefined) return;
-        this.host.post({ kind, target: this.programTarget });
-      });
-      this.toolButtons.push({ el, cost });
-    };
-    bind('#t-treaty', COST_TREATY, 'offerTreaty');
-    bind('#t-sanctions', COST_SANCTIONS, 'imposeSanctions');
-    bind('#t-inspect', COST_INSPECT, 'inspect');
-    bind('#t-sabotage', COST_SABOTAGE, 'sabotage');
-    bind('#t-recon', COST_RECON, 'recon');
-
-    // Зонтик — переключатель: выдать или снять с выбранной страны.
-    const guaranteeBtn = root.querySelector<HTMLButtonElement>('#t-guarantee')!;
-    guaranteeBtn.addEventListener('click', () => {
-      const target = this.programTarget;
-      if (target === undefined) return;
-      this.host.post({
-        kind: this.guaranteed.has(target) ? 'revokeGuarantee' : 'offerGuarantee',
-        target,
-      });
-    });
-    this.toolButtons.push({ el: guaranteeBtn, cost: COST_GUARANTEE });
-
-    const resolution = (id: string, kind: 'sanctions' | 'inspections') => {
-      const el = root.querySelector<HTMLButtonElement>(id)!;
-      el.addEventListener('click', () => {
-        if (this.programTarget === undefined) return;
-        this.host.post({ kind: 'proposeResolution', target: this.programTarget, resolution: kind });
-      });
-      this.toolButtons.push({ el, cost: COST_RESOLUTION });
-    };
-    resolution('#t-res-sanctions', 'sanctions');
-    resolution('#t-res-inspect', 'inspections');
+    const container = root.querySelector<HTMLElement>('#tools')!;
+    for (const brief of TOOL_BRIEFS) {
+      const el = document.createElement('button');
+      el.id = `t-${brief.id}`;
+      el.className = 'tool';
+      el.innerHTML = `<span class="tl-icon">${brief.icon}</span><span class="tl-name">${brief.name}</span><span class="tl-cost">${brief.cost}</span>`;
+      el.addEventListener('click', () => this.useTool(brief.id));
+      container.append(el);
+      this.toolButtons.push({ el, brief });
+    }
     this.updateTools();
+  }
+
+  // Применить инструмент к выбранной программе. Зонтик — переключатель: выдать или снять.
+  private useTool(id: ToolId): void {
+    const target = this.programTarget;
+    if (target === undefined) return;
+    switch (id) {
+      case 'treaty':
+        this.host.post({ kind: 'offerTreaty', target });
+        break;
+      case 'sanctions':
+        this.host.post({ kind: 'imposeSanctions', target });
+        break;
+      case 'inspect':
+        this.host.post({ kind: 'inspect', target });
+        break;
+      case 'sabotage':
+        this.host.post({ kind: 'sabotage', target });
+        break;
+      case 'recon':
+        this.host.post({ kind: 'recon', target });
+        break;
+      case 'guarantee':
+        this.host.post({
+          kind: this.guaranteed.has(target) ? 'revokeGuarantee' : 'offerGuarantee',
+          target,
+        });
+        break;
+      case 'res-sanctions':
+        this.host.post({ kind: 'proposeResolution', target, resolution: 'sanctions' });
+        break;
+      case 'res-inspect':
+        this.host.post({ kind: 'proposeResolution', target, resolution: 'inspections' });
+        break;
+    }
   }
 
   // Сценарий партии: выбор перезапускает кампанию (симуляция сама делает reset).
@@ -440,11 +481,33 @@ export class Hud {
     this.updateTools();
   }
 
-  // Инструмент доступен, когда выбрана цель и хватает влияния.
+  // Инструмент доступен, когда выбрана цель и хватает влияния. Обе причины недоступности
+  // проговариваются вслух: строкой-подсказкой под списком программ и тултипом кнопки —
+  // раньше игрок видел просто серые кнопки без объяснений (спека 2026-08-30 §3.4).
   private updateTools(): void {
-    for (const { el, cost } of this.toolButtons) {
-      el.disabled = this.programTarget === undefined || this.influence < cost;
+    const target = this.programTarget;
+    for (const { el, brief } of this.toolButtons) {
+      const enough = this.influence >= brief.cost;
+      el.disabled = target === undefined || !enough;
+      const why =
+        target === undefined
+          ? 'Сначала выберите страну в списке программ.'
+          : !enough
+            ? `Не хватает влияния: нужно ${brief.cost}, есть ${Math.floor(this.influence)}.`
+            : `Цель: ${factionById(target).name}.`;
+      el.title = `${brief.name} · ${brief.cost} влияния\n${brief.what}\nКогда: ${brief.when}\n${why}`;
+      // Зонтик — переключатель, и подпись должна говорить, что произойдёт по нажатию.
+      if (brief.id === 'guarantee') {
+        const on = target !== undefined && this.guaranteed.has(target);
+        el.querySelector<HTMLElement>('.tl-name')!.textContent = on ? 'Снять зонтик' : brief.name;
+      }
     }
+    const hint =
+      target === undefined
+        ? 'Выберите страну в списке выше — тогда инструменты станут доступны.'
+        : `Цель: ${factionById(target).name}. Наведите на кнопку, чтобы прочитать, что она делает.`;
+    if (this.toolHintEl.textContent !== hint) this.toolHintEl.textContent = hint;
+    this.toolHintEl.classList.toggle('idle', target === undefined);
   }
 
   // Секундный снимок кампании: влияние, часы партии и состояние всех программ.
@@ -538,13 +601,12 @@ export class Hud {
   private updateSalvoButton(): void {
     if (this.lastStats.length === 0) return;
     const able = (s: FactionStat) => s.arsenal > 0 && s.citiesAlive > 0;
-    const chosen = this.attackerSel.value as FactionId | typeof ANY;
+    const side = this.side;
     const can =
-      chosen === ANY
+      side === undefined
         ? this.lastStats.some((s) => s.id !== 'neutral' && able(s))
-        : this.lastStats.some((s) => s.id === chosen && able(s));
+        : this.lastStats.some((s) => s.id === side && able(s));
     this.salvoBtn.disabled = !can;
-    const side = this.currentSide;
     const to = this.targetSel.value as FactionId | typeof ANY;
     const atWar =
       side !== undefined &&
@@ -595,11 +657,46 @@ export class Hud {
     return this._currentYield;
   }
 
-  // Сторона игрока (селект «кто бьёт»): ей приписывается ручной удар, и мстят именно ей.
-  // «случайно» → undefined: удар анонимный, жертва винит случайную сторону (спека §2).
+  // Сторона игрока: ей приписывается ручной удар, и мстят именно ей. Задаётся стартовым
+  // меню через setSide(); до выбора — undefined (удар анонимный, спека 2026-08-29 §2).
   get currentSide(): FactionId | undefined {
-    const v = this.attackerSel.value;
-    return v === ANY ? undefined : (v as FactionId);
+    return this.side;
+  }
+
+  // Сторона игрока выбрана в меню: показать её в шапке и сообщить симуляции (без setSide
+  // симуляция не знает, кому адресовать предложения мира и чью экономику считать своей).
+  setSide(id: FactionId): void {
+    this.side = id;
+    const f = factionById(id);
+    this.sideNameEl.textContent = f.name;
+    this.sideDotEl.style.background = cssColor(id);
+    this.host.post({ kind: 'setSide', faction: id });
+    this.updateSalvoButton();
+  }
+
+  // Состояние раскрытия секций живёт в localStorage: свернул редкое — оно и осталось
+  // свёрнутым, раскрыл — осталось раскрытым (спека 2026-08-30 §6).
+  private restoreSections(root: HTMLElement): void {
+    let saved: Record<string, boolean> = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? '{}') as Record<string, boolean>;
+    } catch {
+      saved = {}; // повреждённое или недоступное хранилище — просто дефолты разметки
+    }
+    const sections = Array.from(root.querySelectorAll<HTMLDetailsElement>('details.sec'));
+    for (const el of sections) {
+      const key = el.dataset.sec;
+      if (key !== undefined && typeof saved[key] === 'boolean') el.open = saved[key];
+      el.addEventListener('toggle', () => {
+        const state: Record<string, boolean> = {};
+        for (const s of sections) if (s.dataset.sec !== undefined) state[s.dataset.sec] = s.open;
+        try {
+          localStorage.setItem(SECTIONS_KEY, JSON.stringify(state));
+        } catch {
+          // приватный режим/переполнение — не повод ронять HUD
+        }
+      });
+    }
   }
 
   private selectYield(selected: HTMLButtonElement): void {

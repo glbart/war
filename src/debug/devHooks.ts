@@ -55,3 +55,10 @@ export function installWaterProbe(scene: Scene): void {
   w.__waterStats = (which: 'stable' | 'sim' = 'stable') => scene.debugWaterStats(which);
   w.__waterFill = (value: number) => scene.debugWaterFill(value);
 }
+
+// __startGame() — пропустить стартовое меню и начать партию (спека 2026-08-30 §5): приёмке
+// нужны прежние кадры глобуса, а не оверлей меню. Только dev-сборка, как и остальные хуки.
+export function installStartHook(start: () => void): void {
+  const w = window as unknown as Record<string, unknown>;
+  w.__startGame = start;
+}

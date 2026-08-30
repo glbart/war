@@ -17,17 +17,13 @@
   padding: 14px 16px;
   backdrop-filter: blur(6px);
   user-select: none;
-  min-width: 230px;
+  /* Фиксированная ширина: сетка инструментов с подписями иначе растягивает панель на треть
+     экрана и закрывает планету. */
+  width: 344px;
   /* Панель выросла (стороны, доктрина, переговоры) — на низких экранах пусть скроллится,
      а не уезжает за край. */
   max-height: calc(100vh - 32px);
   overflow-y: auto;
-}
-#ui h1 {
-  margin: 0 0 8px;
-  font-size: 15px;
-  letter-spacing: 1px;
-  color: #ffd28a;
 }
 #stats {
   margin: 0 0 10px;
@@ -240,12 +236,6 @@
   white-space: nowrap;
 }
 /* Панель ядерных программ (режим «Нераспространение»). */
-#programs-title {
-  margin: 2px 0 4px;
-  font-size: 11px;
-  color: #7d93b8;
-  letter-spacing: 1px;
-}
 #programs {
   margin: 0 0 8px;
   font-size: 11px;
@@ -304,10 +294,6 @@
 }
 #programs .p-bar i.armed {
   background: #ff5544;
-}
-#tools button,
-#tools2 button {
-  font-size: 12px;
 }
 #scenario-row {
   align-items: center;
@@ -421,7 +407,9 @@
 #changelog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  /* Выше стартового меню: вернувшийся игрок сначала читает «что нового», потом выбирает
+     сторону — иначе окно вылезает поверх меню и спорит с ним за внимание. */
+  z-index: 40;
   background: rgba(2, 5, 12, 0.6);
   display: flex;
   align-items: center;
@@ -486,4 +474,346 @@
 }
 #changelog-close:hover {
   background: rgba(120, 170, 255, 0.28);
+}
+
+/* ------------------------------------------------------------------------------------
+   Понятный вход в игру (спека 2026-08-30-onboarding-ui-design): шапка «за кого играем»,
+   цель партии, секции панели, кнопки инструментов с подписями, стартовое меню и справка.
+   ------------------------------------------------------------------------------------ */
+
+/* Шапка HUD: сторона игрока слева, пауза и справка справа. */
+#hud-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+#side-badge {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: #ffd28a;
+}
+#side-badge i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+  box-shadow: 0 0 8px currentColor;
+}
+#side-badge b {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#head-btns {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+#head-btns button {
+  flex: none;
+  width: 28px;
+  padding: 4px 0;
+  text-align: center;
+}
+
+/* Цель партии — то, ради чего всё: таймер, влияние, условие поражения. */
+#goal {
+  margin: 0 0 10px;
+  padding: 7px 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #cfe3ff;
+  background: rgba(30, 48, 82, 0.5);
+  border: 1px solid rgba(120, 170, 255, 0.28);
+  border-radius: 8px;
+}
+#goal b {
+  color: #ff9b5e;
+}
+#goal .goal-line + .goal-line {
+  margin-top: 2px;
+  color: #9fb4d8;
+}
+
+/* Секции панели: заголовок кликабелен, состояние раскрытия помнится (localStorage). */
+#ui details.sec {
+  margin: 0 0 8px;
+  border-top: 1px solid rgba(120, 170, 255, 0.16);
+  padding-top: 6px;
+}
+#ui details.sec > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #7d93b8;
+  text-transform: uppercase;
+  padding: 2px 0 6px;
+}
+#ui details.sec > summary::-webkit-details-marker {
+  display: none;
+}
+#ui details.sec > summary::before {
+  content: '▸ ';
+  color: #5a6d8c;
+}
+#ui details.sec[open] > summary::before {
+  content: '▾ ';
+}
+#ui details.sec > summary:hover {
+  color: #cfe3ff;
+}
+
+/* Кнопки инструментов: иконка, ВИДИМОЕ имя и цена — вместо прежних голых эмодзи. */
+#tools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#ui #tools button.tool {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 7px;
+  font-size: 11px;
+  text-align: left;
+}
+#tools .tl-icon {
+  flex: none;
+}
+#tools .tl-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tools .tl-cost {
+  flex: none;
+  color: #ff9b5e;
+}
+#ui #tools button.tool:disabled .tl-cost {
+  color: #7d93b8;
+}
+/* Строка «почему инструменты недоступны» — ответ на вопрос, который раньше не задавали. */
+#tool-hint {
+  margin: 4px 0 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #9fb4d8;
+}
+#tool-hint.idle {
+  color: #d7c07a;
+}
+
+/* Стартовое меню и экран паузы. */
+#menu-overlay,
+#help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(2, 5, 12, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(3px);
+}
+#menu,
+#help {
+  color: #cfe3ff;
+  font:
+    13px/1.55 'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  background: rgba(8, 14, 26, 0.96);
+  border: 1px solid rgba(120, 170, 255, 0.3);
+  border-radius: 14px;
+  padding: 20px 24px;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+#menu h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  letter-spacing: 1px;
+  color: #ffd28a;
+}
+#menu h2,
+#help h3 {
+  margin: 16px 0 8px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #7d93b8;
+}
+#menu-goal {
+  margin: 0;
+  color: #9fb4d8;
+}
+#menu-goal b {
+  color: #ff9b5e;
+}
+#menu-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+#menu-scenarios {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+}
+.side-card,
+.scen-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  text-align: left;
+  font: inherit;
+  color: #cfe3ff;
+  background: rgba(30, 48, 82, 0.45);
+  border: 1px solid rgba(120, 170, 255, 0.22);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.side-card:hover,
+.scen-card:hover {
+  background: rgba(60, 90, 145, 0.5);
+}
+.side-card.selected,
+.scen-card.selected {
+  border-color: #ff9b5e;
+  background: rgba(120, 70, 40, 0.45);
+}
+.side-card .sc-head,
+.scen-card .sc-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #ffd28a;
+  font-size: 14px;
+}
+.side-card .sc-head i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+.side-card .sc-blurb,
+.scen-card .sc-blurb {
+  font-size: 11px;
+  line-height: 1.45;
+  color: #9fb4d8;
+}
+.side-card .sc-meta {
+  font-size: 10px;
+  color: #7d93b8;
+}
+#menu-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+#menu-actions button {
+  padding: 9px 20px;
+  font: inherit;
+  color: #cfe3ff;
+  background: rgba(120, 170, 255, 0.15);
+  border: 1px solid rgba(120, 170, 255, 0.35);
+  border-radius: 9px;
+  cursor: pointer;
+}
+#menu-actions button:hover {
+  background: rgba(120, 170, 255, 0.28);
+}
+#menu-actions button.primary {
+  background: #b8471f;
+  border-color: #ff9b5e;
+  color: #fff;
+}
+#menu-actions button.primary:hover {
+  background: #d4552a;
+}
+#menu-help {
+  margin-left: auto;
+}
+
+/* Справка «Как играть». */
+#help h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  letter-spacing: 1px;
+  color: #ffd28a;
+}
+#help .help-body {
+  columns: 2 300px;
+  column-gap: 26px;
+}
+#help section {
+  break-inside: avoid;
+  margin-bottom: 12px;
+}
+#help ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #9fb4d8;
+  font-size: 12px;
+}
+#help li {
+  margin: 3px 0;
+}
+#help .help-tools {
+  border-collapse: collapse;
+  font-size: 11px;
+  color: #9fb4d8;
+}
+#help .help-tools td {
+  padding: 3px 6px 3px 0;
+  vertical-align: top;
+  border-top: 1px solid rgba(120, 170, 255, 0.12);
+}
+#help .help-tools .t-name {
+  color: #cfe3ff;
+  white-space: nowrap;
+}
+#help .help-tools .t-cost {
+  color: #ff9b5e;
+  text-align: right;
+}
+#help .help-tools .t-when {
+  color: #6f86ab;
+}
+#help-close {
+  margin-top: 14px;
+  color: #cfe3ff;
+  background: rgba(120, 170, 255, 0.15);
+  border: 1px solid rgba(120, 170, 255, 0.35);
+  border-radius: 8px;
+  padding: 8px 20px;
+  font: inherit;
+  cursor: pointer;
+}
+#help-close:hover {
+  background: rgba(120, 170, 255, 0.28);
+}
+
+/* Кнопки секции «Вид и партия» идут в столбец на всю ширину панели. */
+#ui details.sec > button {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+}
+/* Подпись перед селектом — общая для всех строк «подпись + селект». */
+#ui .row > .label {
+  color: #7d93b8;
+  flex: none;
 }

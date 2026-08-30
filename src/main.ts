@@ -10,6 +10,8 @@ import { CameraRig } from './input/CameraRig';
 import { PointerController } from './input/PointerController';
 import { LocalSimHost } from './sim/SimHost';
 import { Hud } from './ui/Hud';
+import { StartMenu } from './ui/StartMenu';
+import { HelpPanel } from './ui/HelpPanel';
 import { initVersionInfo } from './ui/VersionInfo';
 import { ensureAudio } from './render/effects/sound';
 
@@ -62,6 +64,38 @@ async function boot() {
   const hud = new Hud(host);
   initVersionInfo(); // бейдж версии + окно «Что нового» при первом открытии новой версии
 
+  // Стартовое меню и справка (спека 2026-08-30-onboarding-ui-design): партия НЕ начинается
+  // сама. Пока меню или справка открыты, симуляция не тикает — таймер кампании не должен
+  // идти, пока человек читает правила. Пауза здесь клиентская: симуляция о ней не знает,
+  // шов Command → Simulation → Events не трогается.
+  const menu = new StartMenu();
+  const help = new HelpPanel();
+  let paused = true;
+  const resume = () => {
+    paused = false;
+  };
+  menu.onStart = ({ side, scenario }) => {
+    // Сценарий задаёт стартовые условия и сам сбрасывает партию, сторона идёт следом:
+    // обе команды попадают в один буфер и применятся по порядку на первом же тике.
+    host.post({ kind: 'setScenario', scenario });
+    hud.setSide(side);
+    resume();
+  };
+  menu.onResume = resume;
+  menu.onHelp = () => help.open();
+  help.onClose = () => {
+    // Из справки возвращаемся туда, откуда пришли: меню открыто — партия ждёт дальше.
+    if (!menu.isOpen) resume();
+  };
+  hud.onPause = () => {
+    paused = true;
+    menu.open('pause');
+  };
+  hud.onHelp = () => {
+    paused = true;
+    help.open();
+  };
+
   // Dev-инструменты headless-приёмки (__strike/__reset/__lookAt на window) — только
   // в dev-сборке; динамический импорт под import.meta.env.DEV гарантирует, что Vite
   // вырежет модуль и хуки из прод-бандла (dead-code elimination).
@@ -103,6 +137,22 @@ async function boot() {
   }
   window.addEventListener('keydown', (e) => {
     if (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') setMapMode(!mapMode);
+    // Esc — пауза и меню, H — справка (обе клавиши названы в подсказке HUD и в правилах).
+    if (e.key === 'Escape') {
+      if (help.isOpen) help.close();
+      else if (menu.isOpen) menu.requestClose();
+      else {
+        paused = true;
+        menu.open('pause');
+      }
+    }
+    if (e.key === 'h' || e.key === 'H' || e.key === 'р' || e.key === 'Р') {
+      if (help.isOpen) help.close();
+      else {
+        paused = true;
+        help.open();
+      }
+    }
   });
 
   // Управление картой: драг — панорама, колесо — зум, клик — удар по точке (та же команда,
@@ -171,8 +221,24 @@ async function boot() {
     map.resize(window.innerWidth, window.innerHeight);
   });
 
+  // Dev-хук приёмки: пропустить меню и начать партию сразу (scripts/accept/shots.mjs
+  // снимает кадры глобуса, ему стартовый оверлей только мешает). Только dev-сборка.
+  if (import.meta.env.DEV) {
+    const { installStartHook } = await import('./debug/devHooks');
+    installStartHook(() => {
+      menu.close();
+      help.close();
+      hud.setSide('usa');
+      resume();
+    });
+  }
+
   const loop = new GameLoop(
-    (dt) => host.step(dt),
+    // Пока открыто меню или справка, симуляция стоит: рендер продолжается (глобус крутится
+    // фоном), но время партии не идёт.
+    (dt) => {
+      if (!paused) host.step(dt);
+    },
     (frame) => {
       // Сливаем события симуляции раз за кадр и раздаём всем потребителям (Scene, Hud, слой
       // тайлов) — drainEvents() необратимо опустошает буфер, поэтому делаем это только здесь.
