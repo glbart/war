@@ -33,29 +33,3 @@ export function tileYfToLat(yf: number, n: number): number {
 export function dirToLonLat(dir: Vec3): { lon: number; lat: number } {
   return { lon: Math.atan2(-dir.z, dir.x), lat: Math.asin(clamp(dir.y, -1, 1)) };
 }
-
-// Отклоняет направление dir на угол ang в азимуте az (рад) — точка на конусе вокруг dir.
-// Используется для разброса пусковых площадок вокруг города (sim/Simulation.applySalvo):
-// базис строится от наименее коллинеарной оси, поэтому вырождения у полюсов нет.
-export function jitterDir(dir: Vec3, ang: number, az: number): Vec3 {
-  const ax = Math.abs(dir.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-  const t1x = ax.y * dir.z - ax.z * dir.y;
-  const t1y = ax.z * dir.x - ax.x * dir.z;
-  const t1z = ax.x * dir.y - ax.y * dir.x;
-  const inv = 1 / Math.max(1e-9, Math.hypot(t1x, t1y, t1z));
-  const u = { x: t1x * inv, y: t1y * inv, z: t1z * inv };
-  const v = {
-    x: dir.y * u.z - dir.z * u.y,
-    y: dir.z * u.x - dir.x * u.z,
-    z: dir.x * u.y - dir.y * u.x,
-  };
-  const c = Math.cos(ang);
-  const s = Math.sin(ang);
-  const ca = Math.cos(az);
-  const sa = Math.sin(az);
-  const x = dir.x * c + (u.x * ca + v.x * sa) * s;
-  const y = dir.y * c + (u.y * ca + v.y * sa) * s;
-  const z = dir.z * c + (u.z * ca + v.z * sa) * s;
-  const n = 1 / Math.max(1e-9, Math.hypot(x, y, z));
-  return { x: x * n, y: y * n, z: z * n };
-}

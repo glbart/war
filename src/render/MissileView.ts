@@ -7,21 +7,14 @@ import { uniform, attribute, float, vec3, smoothstep, lessThan, select, clamp } 
 import type { ThreeCtx } from './Renderer';
 import type { Vec3 } from '../sim/geo';
 import { ballisticPosInto } from '../sim/ballistics';
-import { factionById, type FactionId } from '../sim/factions';
 import { findFreeSlotIndex } from './SlotPool';
-import { TRAIL_SEGMENTS, TRAIL_FADE_T, TRAIL_COLOR, SPACE_STRIKE_START_R } from '../assets/config';
+import { TRAIL_SEGMENTS, TRAIL_FADE_T, TRAIL_COLOR } from '../assets/config';
 
 // Точный тип float-юниформа (как в MagmaCore): .value — number.
 function makeFloatUniform(v: number) {
   return uniform(v);
 }
 type FloatUniform = ReturnType<typeof makeFloatUniform>;
-
-// Цветовой юниформ следа: vec3-узел, .value — THREE.Vector3 (компоненты x/y/z = r/g/b).
-function makeColorUniform(r: number, g: number, b: number) {
-  return uniform(vec3(r, g, b));
-}
-type ColorUniform = ReturnType<typeof makeColorUniform>;
 
 // 16, а не 8: при flightTime=2.6с и отсутствии дебаунса ввода/лимита боеголовок в симуляции
 // быстрым кликаньем реально одновременно поднять больше 8 ракет. Запас вместимости —
@@ -30,7 +23,7 @@ type ColorUniform = ReturnType<typeof makeColorUniform>;
 // 24 (было 16): слот теперь занят и ПОСЛЕ детонации баллистической ракеты — пока тает её
 // след (TRAIL_FADE_T) — залп 6 ракет × (полёт до 8с + фейд 5с) держит слоты дольше.
 const POOL_SIZE = 24;
-const START_RADIUS = SPACE_STRIKE_START_R; // общая с sim (точка вспышки ПРО)
+const START_RADIUS = 2.6;
 const END_RADIUS = 1.0;
 const MODEL_SPIN_SPEED = 1.5; // рад/с вращения корпуса вокруг собственной оси
 const FLAME_BASE_SCALE = 0.8;
@@ -51,7 +44,6 @@ interface MissileSlot {
   readonly trailPos: THREE.BufferAttribute;
   readonly uHead: FloatUniform; // прогресс полёта — видимая часть дуги (позади ракеты)
   readonly uFade: FloatUniform; // затухание следа после детонации 1→0
-  readonly uColor: ColorUniform; // цвет следа: сторона-владелец ракеты (иначе — выхлоп)
   hasTrail: boolean;
   fading: boolean; // ракета отлетела, слот занят тающим следом
   fadeT: number;
@@ -81,7 +73,7 @@ export class MissileView {
     const { model, flame } = this.buildMissileModel();
     group.add(model);
     this.spinGroup.add(group);
-    const { trailLine, trailPos, uHead, uFade, uColor } = this.buildTrail();
+    const { trailLine, trailPos, uHead, uFade } = this.buildTrail();
     return {
       group,
       model,
@@ -95,7 +87,6 @@ export class MissileView {
       trailPos,
       uHead,
       uFade,
-      uColor,
       hasTrail: false,
       fading: false,
       fadeT: 0,
@@ -116,7 +107,6 @@ export class MissileView {
     trailPos: THREE.BufferAttribute;
     uHead: FloatUniform;
     uFade: FloatUniform;
-    uColor: ColorUniform;
   } {
     const { THREE } = this.ctx;
     const geo = new THREE.BufferGeometry();
@@ -130,14 +120,11 @@ export class MissileView {
 
     const uHead = makeFloatUniform(0);
     const uFade = makeFloatUniform(1);
-    // Материал следа создаётся на каждый слот пула, поэтому цвет — обычный юниформ слота
-    // (ставится в spawn по стороне), а не пер-вершинный атрибут.
-    const uColor = makeColorUniform(TRAIL_COLOR[0], TRAIL_COLOR[1], TRAIL_COLOR[2]);
     const a = attribute<'float'>('aArc', 'float');
     const behind = select(lessThan(a, uHead), float(1), float(0));
     const bright = float(0.35).add(smoothstep(uHead.sub(0.12), uHead, a).mul(0.65));
     const mat = new THREE.LineBasicNodeMaterial();
-    mat.colorNode = uColor;
+    mat.colorNode = vec3(TRAIL_COLOR[0], TRAIL_COLOR[1], TRAIL_COLOR[2]);
     mat.opacityNode = clamp(behind.mul(bright).mul(uFade), 0, 1);
     mat.transparent = true;
     mat.blending = THREE.AdditiveBlending;
@@ -147,7 +134,7 @@ export class MissileView {
     trailLine.visible = false;
     trailLine.frustumCulled = false;
     this.spinGroup.add(trailLine);
-    return { trailLine, trailPos, uHead, uFade, uColor };
+    return { trailLine, trailPos, uHead, uFade };
   }
 
   // Порт buildMissileModel() эталона (~643-674): боеголовка, вторая ступень, межступенчатое
@@ -233,16 +220,8 @@ export class MissileView {
   // визуально не появится, но ничего не ломается и не пропадает "неправильно".
   // from — точка старта на поверхности: задана → баллистическая дуга (МБР), нет → прежний
   // «удар из космоса». flightTime приходит из события missileLaunched (sim авторитетен —
-  // хардкод-дубль константы 2.6 из рендера устранён). faction — сторона-владелец: её цветом
-  // красится след (спека 2026-08-29); без стороны — прежний цвет выхлопа.
-  spawn(
-    id: number,
-    dir: Vec3,
-    yieldMt: number,
-    flightTime: number,
-    from?: Vec3,
-    faction?: FactionId,
-  ): void {
+  // хардкод-дубль константы 2.6 из рендера устранён).
+  spawn(id: number, dir: Vec3, yieldMt: number, flightTime: number, from?: Vec3): void {
     const slot = this.acquireSlot();
     if (!slot) {
       if (!this.poolExhaustedWarned) {
@@ -268,8 +247,6 @@ export class MissileView {
     slot.trailLine.visible = false;
 
     if (from) {
-      const trail = faction ? factionById(faction).color : TRAIL_COLOR;
-      slot.uColor.value.set(trail[0], trail[1], trail[2]);
       // Заполняем дугу следа ОДИН РАЗ (позиции всей траектории); в полёте меняется лишь uHead.
       const arr = slot.trailPos.array as Float32Array;
       for (let i = 0; i <= TRAIL_SEGMENTS; i++) {

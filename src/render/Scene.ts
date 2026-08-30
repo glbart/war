@@ -24,8 +24,6 @@ import { Crust, crackStrengthForDepth } from '../crust/Crust';
 import { CrustView } from './CrustView';
 import { MagmaCore } from './MagmaCore';
 import type { HoleMask } from './HoleMask';
-import { CityMarkersView } from './CityMarkersView';
-import { InterceptView } from './InterceptView';
 import { ShatterState } from './shatterState';
 import { ShatterShardsView } from './ShatterShardsView';
 import { playBoom, playShatter } from './effects/sound';
@@ -50,8 +48,6 @@ export class Scene {
   private readonly ejectaView: EjectaView;
   private readonly debrisView: DebrisView;
   private readonly decalView: DecalView;
-  private readonly cityMarkers: CityMarkersView; // города по сторонам (спека 2026-08-29)
-  private readonly interceptView: InterceptView; // вспышки работы ПРО
   private readonly waterField: WaterField;
   private readonly oceanShell: OceanShell;
   private readonly crust: Crust;
@@ -82,8 +78,6 @@ export class Scene {
     this.ejectaView = new EjectaView(ctx, globe.spinGroup);
     this.debrisView = new DebrisView(ctx, globe.spinGroup);
     this.decalView = new DecalView(ctx, globe);
-    this.cityMarkers = new CityMarkersView(ctx, globe.spinGroup);
-    this.interceptView = new InterceptView(ctx, globe.spinGroup);
     // Интерактивная вода: поле волн + маска берега + анимированная оболочка над глобусом.
     this.waterField = new WaterField(ctx);
     const coastTex = buildCoastTexture(ctx);
@@ -112,33 +106,15 @@ export class Scene {
     switch (event.kind) {
       case 'missileLaunched':
         if (this.shatter.phase === 'shattered') break; // планеты нет — удары в пустоту глушим
-        this.missileView.spawn(
-          event.id,
-          event.dir,
-          event.yield,
-          event.flightTime,
-          event.from,
-          event.faction,
-        );
+        this.missileView.spawn(event.id, event.dir, event.yield, event.flightTime, event.from);
         break;
       case 'explosionStarted':
         this.missileView.despawn(event.id); // ракеты, выпущенные до раскола, убираются штатно
         if (this.shatter.phase === 'shattered') break;
         this.startExplosion(event.dir, event.yield, event.seed, event.surface, event.biome);
         break;
-      case 'interception':
-        // ПРО отработала: вспышка на дуге; при успехе ракета гаснет (след дотаивает сам).
-        this.interceptView.spawn(event.pos, event.success, this.clock);
-        if (event.success) this.missileView.despawn(event.id);
-        break;
-      case 'cityHit':
-        // Маркер города гаснет и мельчает по доле выживших (alive — остаток населения).
-        this.cityMarkers.setAlive(event.name, event.alive);
-        break;
       case 'planetReset':
         this.missileView.clear();
-        this.cityMarkers.clear();
-        this.interceptView.clear();
         // Дым/огонь гриба, выброс грунта, огненные шары/волны и водные всплески не должны
         // переживать восстановление планеты (фикс: дым висел после reset).
         this.explosionView.clear();
@@ -161,7 +137,7 @@ export class Scene {
         this.magma.mesh.visible = true;
         break;
       default:
-        break; // остальные события (statsChanged/factionsChanged/labelsToggled) — забота Hud
+        break; // остальные события (cityHit/statsChanged/labelsToggled/...) — забота Hud, не Scene
     }
   }
 
@@ -243,7 +219,6 @@ export class Scene {
     this.waterField.step(dt);
     this.oceanShell.setTime(this.clock);
     this.missileView.update(dt);
-    this.interceptView.setTime(this.clock);
     this.explosionView.update(dt);
     this.waterBurstView.update(dt);
     this.particlePool.setTime(this.clock);
@@ -302,8 +277,6 @@ export class Scene {
     this.globe.setPlanetVisible(visible);
     this.oceanShell.mesh.visible = visible;
     this.crustView.setVisible(visible);
-    this.cityMarkers.setVisible(visible); // городов на осколках уже нет
-    this.interceptView.mesh.visible = visible;
   }
 
   // Целостность коры [0..1] — для HUD (main.ts опрашивает раз за кадр).

@@ -6,8 +6,7 @@ import { TICK_DT } from '../../src/core/time';
 describe('Simulation', () => {
   it('detonate рождает missileLaunched, затем explosionStarted после полёта', () => {
     const sim = new Simulation(123);
-    // Сахара: вокруг только нейтральные города, ПРО удар не перехватит (см. sim/defense.ts).
-    const dir = lonLatToDir((20 * Math.PI) / 180, (23 * Math.PI) / 180);
+    const dir = lonLatToDir((37.62 * Math.PI) / 180, (55.75 * Math.PI) / 180);
     let ev = sim.step(TICK_DT, [{ kind: 'detonate', dir, yield: 10 }]);
     expect(ev.some((e) => e.kind === 'missileLaunched')).toBe(true);
     // прогоняем ~3 секунды (полёт 2.6с)

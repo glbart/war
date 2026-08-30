@@ -11,9 +11,7 @@
     "test:watch": "vitest",
     "lint": "eslint . && prettier --check .",
     "gen:landmask": "node scripts/gen-landmask.mjs",
-    "accept": "node scripts/accept/shots.mjs",
-    "balance": "node scripts/balance.mjs",
-    "gen:countries": "node scripts/gen-countries.mjs"
+    "accept": "node scripts/accept/shots.mjs"
   },
   "dependencies": {
     "miniplex": "2.0.0",

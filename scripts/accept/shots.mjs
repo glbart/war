@@ -227,17 +227,6 @@ async function main() {
       );
     }
 
-    // Стартовое меню (спека 2026-08-30) ждёт выбора стороны — приёмке оно только мешает:
-    // пропускаем его dev-хуком и получаем прежние кадры глобуса.
-    const started = await evalJs(
-      'typeof window.__startGame === "function" ? (window.__startGame(), true) : false',
-    );
-    console.log('стартовое меню пропущено:', fmtRemote(started));
-    if (!fmtRemote(started).includes('true')) {
-      throw new Error('window.__startGame не установлен — installStartHook не сработал');
-    }
-    await sleep(500);
-
     // --- Удар по суше (Сахара) ---
     console.log('Удар по суше 20,23...');
     await evalJs('window.__strike(20, 23, 100)');

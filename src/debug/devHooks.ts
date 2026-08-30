@@ -2,7 +2,6 @@ import type { SimHost } from '../sim/SimHost';
 import type { GlobeView } from '../render/GlobeView';
 import type { Scene } from '../render/Scene';
 import { lonLatToDir } from '../sim/geo';
-import type { SimEvent } from '../sim/events';
 
 // Dev-инструменты headless-приёмки (Task 12): вешают на window хуки для нанесения ударов,
 // сброса симуляции и наведения камеры без ручного взаимодействия с UI. Используются
@@ -32,21 +31,6 @@ export function installDevHooks(host: SimHost, globe: GlobeView): void {
   };
 }
 
-// __hud(event) — прогнать событие симуляции прямо в HUD, минуя игру. Нужен headless-приёмке
-// для редких экранов (итоги партии, предложение перемирия), до которых иначе надо доигрывать
-// целую войну. Только dev-сборка, как и остальные хуки.
-export function installHudHook(hud: { onEvent: (e: SimEvent) => void }): void {
-  const w = window as unknown as Record<string, unknown>;
-  w.__hud = (event: SimEvent) => hud.onEvent(event);
-}
-
-// __map — плоская карта: headless-приёмке нужно находить страну под точкой экрана, чтобы
-// проверять выбор страны кликом. Только dev-сборка, как и остальные хуки.
-export function installMapHook(map: unknown): void {
-  const w = window as unknown as Record<string, unknown>;
-  w.__map = map;
-}
-
 // __waterStats() — readback поля воды (min/max высоты R и скорости G): прямой факт «есть ли
 // энергия в поле» без интерпретации через шейдинг. Ставится отдельным вызовом, потому что
 // Scene создаётся в main.ts ПОЗЖЕ installDevHooks (ей нужны globe и damageField).
@@ -54,11 +38,4 @@ export function installWaterProbe(scene: Scene): void {
   const w = window as unknown as Record<string, unknown>;
   w.__waterStats = (which: 'stable' | 'sim' = 'stable') => scene.debugWaterStats(which);
   w.__waterFill = (value: number) => scene.debugWaterFill(value);
-}
-
-// __startGame() — пропустить стартовое меню и начать партию (спека 2026-08-30 §5): приёмке
-// нужны прежние кадры глобуса, а не оверлей меню. Только dev-сборка, как и остальные хуки.
-export function installStartHook(start: () => void): void {
-  const w = window as unknown as Record<string, unknown>;
-  w.__startGame = start;
 }

@@ -1,6 +1,5 @@
 import { angleBetween, type Vec3 } from '../../sim/geo';
 import type { City } from '../../sim/cities';
-import type { FactionId } from '../../sim/factions';
 import { YIELDS, type Yield } from '../../assets/config';
 
 // Мощности заряда, поддерживаемые демо (мегатонны).
@@ -12,15 +11,7 @@ type YieldMt = Yield;
 const ANG_PATCH: Record<YieldMt, number> = { 1: 0.05, 10: 0.082, 100: 0.14 };
 const YS: Record<YieldMt, number> = { 1: 0.6, 10: 1.0, 100: 1.7 };
 
-// faction/alive (спека 2026-08-29) идут наружу в событии cityHit: лента показывает сторону,
-// маркеры городов гаснут по доле выживших (alive — ОСТАВШЕЕСЯ население, млн, после вычета).
-export type CasualtyHit = {
-  name: string;
-  deaths: number;
-  atWaveTime: number;
-  faction: FactionId;
-  alive: number;
-};
+export type CasualtyHit = { name: string; deaths: number; atWaveTime: number };
 
 // Чистая функция расчёта жертв взрыва (порт формулы из демо, ~795-809).
 // Мутирует cities на месте: c.alive уменьшается на число погибших, поэтому
@@ -58,7 +49,7 @@ export function computeCasualties(
     c.alive -= deaths;
     const q = Math.min(1, d / waveMaxAng);
     const atWaveTime = 12 * (1 - Math.pow(1 - q, 1 / 1.8)) * ts;
-    hits.push({ name: c.name, deaths, atWaveTime, faction: c.faction, alive: c.alive });
+    hits.push({ name: c.name, deaths, atWaveTime });
     totalDeaths += deaths;
   }
   return { hits, totalDeaths };
